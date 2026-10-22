@@ -1,0 +1,34 @@
+# FoVS-EgoExo, paper settings (Sec. 5.2): cooking / music / health / bike repair / bouldering, 4 s forecast.
+# Past window length is not stated; 4 s (= forecast) is our assumption.
+build:
+  lift:
+    cube_size: 3.2            # Table 4 also reports D=6.4/R=32 and D=3.2/R=32
+    resolution: 16
+    orientation_deg: 55.0
+    cone_deg: [30.0, 8.0, 2.0]
+    max_dist_std: null
+    grid_frame: world
+  window:
+    steps_per_unit: 10
+    past_units: 4
+    future_units: 4
+    stride_units: 1
+  pack:
+    protocol: split_file      # json {take_name: train|val|test}, e.g. from the official Ego-Exo4D splits
+    split_file: data/fovs_egoexo/split.json
+    min_points_sigma: 2.0
+    cv_folds_by_location: false
+data:
+  root: data/fovs_egoexo
+  levels: [orientation, peripheral, central, foveal]
+  augment: true
+  num_workers: 8
+model:
+  name: egospanlift
+  f_maps: [128, 256, 512, 1024]
+  layer_order: cbrd
+train:
+  epochs: 50
+  batch_size: 16
+  lr: 1.0e-4
+  out_dir: runs/fovs_egoexo/egospanlift_s0

@@ -1,0 +1,35 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# generated output: anchored to the project root, so the egospan/data/ package is NOT ignored
+/data/
+/runs/
+/results/
+/figs/
+
+# large arrays, checkpoints and media anywhere else (datasets and runs live in the folders above)
+*.npy
+*.npz
+*.pt
+*.pth
+*.ckpt
+*.mp4
+*.zip
+
+# logs (e.g. nohup / tmux runs)
+*.log
+nohup.out
+log_*.txt
+
+# editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

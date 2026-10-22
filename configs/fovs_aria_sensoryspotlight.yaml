@@ -1,0 +1,40 @@
+# The SensorySpotlight (aria-3d-analysis branch) reimplementation settings, for comparison with their numbers.
+# Close but not bit-identical: their encoder blocks are Conv-GroupNorm-GELU and their upsampling is a 2x2x2
+# transposed conv; here Conv-GroupNorm-ReLU and pytorch-3dunet's 3x3x3 transposed conv. Their SOR ran once on the
+# whole point cloud (k=16); here per step.
+build:
+  lift:
+    cube_size: 3.2
+    resolution: 16
+    sor_neighbors: 16
+    sor_std_ratio: 2.0
+    max_dist_std: 0.1
+    grid_frame: local         # anchor CPF axes
+  window: {steps_per_unit: 10, past_units: 2, future_units: 2, stride_units: 1}
+  pack:
+    protocol: aea
+    test_locations: [4]
+    min_points_sigma: null    # no sample filter
+data:
+  root: data/fovs_aria_ss
+  augment: false
+model:
+  name: egospanlift
+  f_maps: [32, 64, 128, 256]  # C = 256
+  layer_order: cgr
+  head: learned
+  skip: concat
+  bottom: conv
+  upsample: deconv
+  tf_layers: 4
+  tf_heads: 8
+train:
+  epochs: 30
+  batch_size: 64
+  lr: 1.0e-3
+  optimizer: adamw
+  weight_decay: 1.0e-4
+  scheduler: onecycle
+  out_dir: runs/fovs_aria_ss/esl_s0
+eval:
+  threshold: tune

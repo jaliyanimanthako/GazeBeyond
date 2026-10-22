@@ -1,0 +1,42 @@
+# Attention-shift benchmark (spherical cells, scored natively): one sample per attention shift (egospan/shifts.py: 75 deg/s
+# fixations held >= 150 ms, >= 30 deg between consecutive held fixations), anchored 0.3 s before the gaze leaves the
+# fixation, as the lab's WHERE questions; input = the usual 2 s of span grids, target = the landing fixation's cones.
+# Same build settings as the lab-matching rebuild otherwise. Fine-tune from a trained forecaster of the SAME fold:
+#   --set train.init=<run folder>  ; landing-direction error: scripts/landing_eval.py
+build:
+  lift:
+    cube_size: 3.2
+    resolution: 16
+    orientation_deg: 55.0
+    cone_deg: [30.0, 8.0, 2.0]
+    sor_neighbors: 16
+    sor_std_ratio: 2.0
+    sor_scope: global
+    max_dist_std: 0.1
+    grid_frame: local
+    crop_around_user: false
+    grid: spherical                      # azimuth x elevation x distance cells (egospan/spherical.py)
+  window: {steps_per_unit: 10, past_units: 2, future_units: 2, stride_units: 1, anchor: shift, shift_lag_steps: 3}
+  pack:
+    protocol: aea
+    test_locations: [4]
+    val_frac: 0.1
+    seed: 0
+    min_points_sigma: null
+    cv_folds_by_location: true
+data:
+  root: data/fovs_aria_shift_sph
+  levels: [orientation, peripheral, central, foveal]
+  augment: true
+  num_workers: 4
+model:
+  name: egospanlift
+  f_maps: [128, 256, 512, 1024]
+  layer_order: cbrd
+train:
+  epochs: 50
+  batch_size: 16
+  lr: 1.0e-4
+  out_dir: runs/fovs_aria_shift_sph/scratch_s0
+eval:
+  space: native                          # cartesian: map back to 20 cm voxels (see spherical_ceiling.py)

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "egospan"
+version = "0.1.0"
+description = "Unofficial codebase for 'Gaze Beyond the Frame: Forecasting Egocentric 3D Visual Span' (NeurIPS 2025)"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.1", "numpy>=1.24", "scipy>=1.10", "pandas>=2.0", "pyyaml>=6.0", "tqdm>=4.60"]
+
+[project.optional-dependencies]
+aria = ["projectaria-tools"]
+viz = ["matplotlib>=3.7"]
+dev = ["pytest>=7", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["egospan*"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

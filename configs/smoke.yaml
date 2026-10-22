@@ -1,0 +1,24 @@
+# Tiny model on synthetic recordings: checks the whole pipeline on a laptop in a minute.
+#   python scripts/build_dataset.py synthetic --config configs/smoke.yaml --out data/synthetic --n 10
+#   python scripts/build_dataset.py pack --config configs/smoke.yaml --out data/synthetic
+#   python scripts/train.py --config configs/smoke.yaml
+build:
+  pack:
+    protocol: aea
+    test_locations: [4]
+    min_points_sigma: null
+data:
+  root: data/synthetic
+  num_workers: 0
+model:
+  f_maps: [16, 32, 64, 128]
+  layer_order: cgr
+  tf_layers: 1
+  tf_heads: 4
+train:
+  epochs: 2
+  batch_size: 8
+  lr: 1.0e-3
+  device: cpu
+  log_every: 0
+  out_dir: runs/smoke

@@ -1,0 +1,40 @@
+# Rebuild FoVS-Aria from the raw AEA files with the SensorySpotlight lab's settings, so the result matches their
+# built benchmark (/data/SS/SS/Dynamic_Fusion_ALFA/data/fovs_aria) sample for sample: anchor-CPF grid frame, crop
+# around the anchor only, dist_std < 0.1 and one statistical outlier pass (16 neighbours, 2 std) over the whole cloud,
+# no sample filter, the lab's split (location 4 = test) and location-wise CV folds.
+# Variants for the temporal experiments add, at build time, e.g.:
+#   --set build.window.time_bins=4 build.window.soft=true build.window.ray_channel=true
+build:
+  lift:
+    cube_size: 3.2
+    resolution: 16
+    orientation_deg: 55.0
+    cone_deg: [30.0, 8.0, 2.0]
+    sor_neighbors: 16
+    sor_std_ratio: 2.0
+    sor_scope: global
+    max_dist_std: 0.1
+    grid_frame: local
+    crop_around_user: false
+  window: {steps_per_unit: 10, past_units: 2, future_units: 2, stride_units: 1}
+  pack:
+    protocol: aea
+    test_locations: [4]
+    val_frac: 0.1
+    seed: 0
+    min_points_sigma: null
+    cv_folds_by_location: true
+data:
+  root: data/fovs_aria_rebuild
+  levels: [orientation, peripheral, central, foveal]
+  augment: true
+  num_workers: 4
+model:
+  name: egospanlift
+  f_maps: [128, 256, 512, 1024]
+  layer_order: cbrd
+train:
+  epochs: 50
+  batch_size: 16
+  lr: 1.0e-4
+  out_dir: runs/fovs_aria_rebuild/egospanlift_s0

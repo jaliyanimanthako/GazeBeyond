@@ -1,0 +1,24 @@
+# Train the paper-faithful SpanForecaster on the lab's already-built benchmark (no raw recordings needed).
+#   python scripts/convert_sensoryspotlight.py --src /data/SS/SS/Dynamic_Fusion_ALFA/data/fovs_aria --out data/fovs_aria_lab
+#   python scripts/train.py --config configs/fovs_aria_lab.yaml
+# Folds: --set data.fold=2 (location-wise cross-validation, if cv_splits.npz was present).
+data:
+  root: data/fovs_aria_lab
+  levels: [orientation, peripheral, central, foveal]
+  horizon: null                # all four 0.5 s bins = the 2 s union (the paper's target)
+  augment: true
+  max_shift: 2
+  num_workers: 4
+model:
+  name: egospanlift
+  f_maps: [128, 256, 512, 1024]
+  layer_order: cbrd
+train:
+  epochs: 50
+  batch_size: 16
+  lr: 1.0e-4
+  out_dir: runs/fovs_aria_lab/egospanlift_s0
+eval:
+  threshold: 0.5
+  saliency: true
+  distance: true

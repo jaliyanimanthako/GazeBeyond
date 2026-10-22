@@ -1,0 +1,53 @@
+# FoVS-Aria, paper settings (Sec. 3-5.1, Appendix A). Values marked [unspec.] are not given in the paper.
+build:
+  lift:
+    cube_size: 3.2            # D = 3.2 m
+    resolution: 16            # R = 16 -> 20 cm voxels
+    orientation_deg: 55.0
+    cone_deg: [30.0, 8.0, 2.0]
+    sor_neighbors: 20         # [unspec.] Open3D defaults
+    sor_std_ratio: 2.0        # [unspec.]
+    max_dist_std: null        # no confidence-based filtering (Sec. 3.2)
+    grid_frame: world         # Eq. 3: world-axis-aligned grid centred on the user
+    crop_around_user: true
+  window:
+    steps_per_unit: 10        # 10 Hz gaze, 1 s units
+    past_units: 2             # 2 s observed
+    future_units: 2           # 2 s forecast
+    stride_units: 1           # 1 s sliding window
+  pack:
+    protocol: aea
+    test_locations: [4]       # unseen location
+    val_frac: 0.1             # [unspec.] "randomly stratifying the rest"
+    min_points_sigma: 2.0     # drop samples with keypoints of interest < mean - 2 std (Appendix A.1)
+    points_channel: orientation   # [unspec.] which keypoints are "of interest"
+    exclude_file: null        # manual curation list (Appendix A.1), one recording per line
+data:
+  root: data/fovs_aria
+  levels: [orientation, peripheral, central, foveal]
+  augment: true
+  max_shift: 2
+  num_workers: 4
+model:
+  name: egospanlift
+  f_maps: [128, 256, 512, 1024]   # 5-128-256-512-1024, C = 1024
+  layer_order: cbrd               # Conv-BatchNorm-ReLU-Dropout
+  dropout: 0.1
+  upsample: nearest               # pytorch-3dunet default for DoubleConv
+  token_pool: avg                 # [unspec.]
+  tf_layers: 4                    # [unspec.]
+  tf_heads: 8                     # [unspec.]
+  head: union                     # global embedding = encoder(union of all observed spans)
+  skip: head                      # [unspec.]
+  bottom: add                     # [unspec.]
+train:
+  epochs: 50
+  batch_size: 16
+  lr: 1.0e-4
+  optimizer: adam
+  weight_decay: 0.0
+  scheduler: none
+  loss: dice
+  out_dir: runs/fovs_aria/egospanlift_s0
+eval:
+  threshold: 0.5                  # [unspec.]
