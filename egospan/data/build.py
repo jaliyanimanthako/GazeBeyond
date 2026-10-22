@@ -256,8 +256,8 @@ class _Grids:
 
 def extract_shift_samples(streams, lift_cfg, win_cfg, shift_cfg=None):
     """One sample per attention shift (egospan/shifts.py: 75 deg/s fixations held >= 150 ms, >= 30 deg between
-    consecutive held fixations, <= 1 s apart), as the lab's WHERE questions (attention_forecast.py: the query is
-    shift_lag_steps before the gaze leaves fixation A, i.e. at the sample end_A + 1 - lag):
+    consecutive held fixations, <= 1 s apart), as the lab's WHERE questions (attention_forecast.py: the shift's step
+    is the last sample at or before t_leave = A's last sample + 1 / fs; the query is shift_lag_steps before it):
         X        the usual input grids over the P observed steps ending at the query, in the query's anchor frame
         YF       (1, 4, *shape) the span levels of the LANDING fixation B (the union over its samples)
         land_dir the mean world gaze direction of B, in the anchor frame (the WHERE answer)
@@ -281,8 +281,13 @@ def extract_shift_samples(streams, lift_cfg, win_cfg, shift_cfg=None):
     keys = ["X", "YF", "t0_us", "T_world_grid", "poses_grid", "gaze_grid", "gaze_cpf", "point_counts", "land_dir",
             "gaze_now", "shift_deg", "land_t0_us", "land_t1_us"]
     out = {k: [] for k in keys + (["YF_cart"] if sph is not None else [])}
+    unit_us = int(round(1e6 / win_cfg.steps_per_unit))                     # 0.1 s at 10 Hz
     for a, b, ang in zip(sh["src"], sh["dst"], sh["angle_deg"]):
-        q = int(fix["end"][a]) + 1 - win_cfg.shift_lag_steps
+        # the lab's rule (attention_shift_labels / attention_forecast): the gaze leaves A at t_leave = (A's last
+        # sample) + 1 / fs, the shift's step is the last sample at or before t_leave (the next sample, or A's last one
+        # when the next comes a few us later than 1 / fs), and the question is shift_lag_steps before that step
+        i = int(np.searchsorted(t, t[fix["end"][a]] + unit_us, side="right")) - 1
+        q = i - win_cfg.shift_lag_steps
         past = np.arange(q - P + 1, q + 1)
         if past[0] < 0 or not streams.valid[past].all() or np.any(np.diff(t[past]) > win_cfg.max_gap_factor * dt):
             continue

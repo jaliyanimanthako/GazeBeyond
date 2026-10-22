@@ -37,7 +37,8 @@ def test_samples_follow_the_shifts(rec):
     w = unit(np.einsum("nij,nj->ni", rec.T_world_cpf[:, :3, :3], rec.gaze_cpf))
     fix = detect_fixations(w, rec.t_us, rec.valid)
     sh = attention_shifts(fix, rec.t_us)
-    q = fix["end"][sh["src"]] + 1 - 3                                      # 0.3 s before the gaze leaves A
+    t = rec.t_us                                                          # the lab's rule: last sample <= A's end + 0.1 s
+    q = np.searchsorted(t, t[fix["end"][sh["src"]]] + 100_000, side="right") - 1 - 3
     ok = q >= 19                                                          # needs 2 s of history
     np.testing.assert_array_equal(arr["t0_us"], rec.t_us[q[ok]])
     assert len(arr["X"]) == ok.sum() > 5
@@ -163,3 +164,20 @@ def test_perfect_prediction_points_at_the_landing():
     prob2 = prob + 0.5 * (dirs @ le.unit(np.array([1.0, 0, 0.2])) > np.cos(np.radians(3)))   # a second, weaker peak
     p3 = le.predict_dirs(prob2, dirs)
     assert le.angle(p3[0], true) < 3 and le.angle(p3[1], np.array([1.0, 0, 0.2])) < 4
+
+
+def test_anchor_follows_the_labs_rounding():
+    """when the sample after A comes slightly later than 0.1 s, the lab's shift step is A's last sample (one earlier)."""
+    rec = make_recording(seconds=40, seed=1)
+    jitter = np.zeros(len(rec.t_us), np.int64)
+    jitter[1::2] = 30                                                     # every other sample 30 us late
+    rec.t_us = rec.t_us + jitter
+    w = unit(np.einsum("nij,nj->ni", rec.T_world_cpf[:, :3, :3], rec.gaze_cpf))
+    fix = detect_fixations(w, rec.t_us, rec.valid)
+    sh = attention_shifts(fix, rec.t_us)
+    arr = extract_samples(rec, CART, SHIFT)
+    end = fix["end"][sh["src"]]
+    late = (rec.t_us[np.minimum(end + 1, len(rec.t_us) - 1)] - rec.t_us[end]) > 100_000
+    q = np.where(late, end - 3, end + 1 - 3)
+    np.testing.assert_array_equal(arr["t0_us"], rec.t_us[q[q >= 19]])
+    assert late.any() and (~late).any()
