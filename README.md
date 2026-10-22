@@ -307,6 +307,23 @@ python scripts/landing_eval.py --runs runs/fovs_aria_shift_sph/cv/ft_f4 \
     --lab-queries /data/SS/SS/Dynamic_Fusion_ALFA/data/traj_forecast/attention_shift/senses_suite/data_aea_lag.npz
 ```
 
+### 3D scene features for the lab's WHERE model
+
+`scripts/export_where_geometry.py` turns a spherical shift benchmark into a per-direction input for the lab's WHERE
+suite: for each question and each of its 468 candidate directions, the fraction of that 10 deg sky patch holding each
+span / seen surfaces in each of the 2 s, and how near the closest surface is (only what was observed up to the
+question). It first checks that the lab's landing directions agree with ours (same head frame). Use the room-scale
+config (8 m cube, distances to 6.9 m) so surfaces across the room count.
+
+```bash
+python scripts/build_dataset.py aea-server --config configs/fovs_aria_shift_sph_far.yaml \
+    --slam-root /data/SS/Aria_data/mps_slam --gaze-root /data/SS/Aria_data/gaze --cpf-root data/aea_cpf \
+    --out data/fovs_aria_shift_sph_far
+python scripts/build_dataset.py pack --config configs/fovs_aria_shift_sph_far.yaml --out data/fovs_aria_shift_sph_far
+python scripts/export_where_geometry.py --bench data/fovs_aria_shift_sph_far --suite $S --out $S/geo3d_aea_lag_far.npy
+# SensorySpotlight: WS_VARIANTS=...,3d,mem+3d WS_GEO3D_SUF=_far ... attention_senses_suite.py train aea lag location residual ...
+```
+
 ## Copy path (our addition, not in the paper)
 
 Copying the last observed second is hard to beat when the gaze stays put. `model.copy_path` feeds the last second's
