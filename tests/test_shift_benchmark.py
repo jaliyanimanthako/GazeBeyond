@@ -181,3 +181,35 @@ def test_anchor_follows_the_labs_rounding():
     q = np.where(late, end - 3, end + 1 - 3)
     np.testing.assert_array_equal(arr["t0_us"], rec.t_us[q[q >= 19]])
     assert late.any() and (~late).any()
+
+
+def test_gaze_path_from_the_stored_poses(tmp_path):
+    """without gaze_all.npz the gaze branch is fed from each sample's stored poses and gaze (build_gaze_paths' layout)."""
+    from scipy.spatial.transform import Rotation
+    from egospan.engine import train
+    names = [f"synth_loc{1 + i % 3}_{i:04d}" for i in range(4)]
+    sb = str(tmp_path / "shift")
+    _bench(sb, CART, SHIFT, names)
+    b = PackedBenchmark(sb)
+    path, layout = b.gaze()
+    assert path.shape == (len(b.arrays["X"]), 20, 11) and layout["n_features"] == 11
+    i = len(path) // 2
+    A = b.arrays
+    np.testing.assert_allclose(path[i, :, 0:3], unit(A["gaze_grid"][i]), atol=1e-5)
+    np.testing.assert_allclose(path[i, :, 3:6], unit(A["gaze_cpf"][i]), atol=1e-5)
+    R = Rotation.from_rotvec(path[i, :, 6:9].astype(np.float64)).as_matrix()
+    np.testing.assert_allclose(R, A["poses_grid"][i, :, :3, :3], atol=1e-4)
+    # the last observed step is the anchor itself: no rotation, gaze in the grid = gaze in the CPF; and it lies
+    # inside the current fixation (gaze_now is that fixation's mean direction)
+    np.testing.assert_allclose(path[:, -1, 6:9], 0, atol=1e-4)
+    np.testing.assert_allclose(path[:, -1, 0:3], path[:, -1, 3:6], atol=1e-4)
+    assert np.median(angle(path[:, -1, 0:3], A["gaze_now"])) < 5
+    assert (path[..., 9:] == 1).all()
+    # window benchmarks store past + future steps: only the past ones are used
+    wb = str(tmp_path / "win")
+    _bench(wb, CART, WindowConfig(), names[:2])
+    w = PackedBenchmark(wb)
+    np.testing.assert_allclose(w.gaze()[0][:, :, 0:3], unit(w.arrays["gaze_grid"][:, :20]), atol=1e-5)
+    # train with the gaze branch on (augmented: the directions turn with the grid)
+    rep = train(_cfg(sb, str(tmp_path / "gz"), data__gaze_paths=True, data__augment=True))
+    assert np.isfinite(rep["mean"]["iou"])

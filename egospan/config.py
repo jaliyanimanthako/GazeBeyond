@@ -24,8 +24,8 @@ class DataConfig:
     horizon: int | None = None              # future units in the target union (None = all; Fig. 4-b varies it)
     levels: list = field(default_factory=lambda: list(LEVELS))   # one level -> single-task model
     drop_span_input: bool = False           # "w/o previous span" ablation
-    gaze_paths: bool = False                # add the past gaze / head path branch (needs <root>/gaze_all.npz from
-                                            # scripts/build_gaze_paths.py)
+    gaze_paths: bool = False                # add the past gaze / head path branch (<root>/gaze_all.npz from
+                                            # scripts/build_gaze_paths.py, or our builds' stored poses and gaze)
     video_features: bool = False            # lifted camera (V-JEPA) features, <root>/video_all.npz from
                                             # scripts/attach_video_features.py (anchor-CPF grids only)
     crop_front: bool = False                # model sees / predicts only the front half (R x R x R/2); val and test

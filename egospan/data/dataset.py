@@ -56,9 +56,14 @@ class PackedBenchmark:
         return self._video
 
     def gaze(self):
-        """Past gaze / head path per sample, written by scripts/build_gaze_paths.py: (path (N, steps, F), layout)."""
+        """Past gaze / head path per sample: (path (N, steps, F), layout). From <root>/gaze_all.npz (written by
+        scripts/build_gaze_paths.py for the converted lab data) or, for our own builds, which store every sample's
+        poses and gaze, computed from them (path_from_arrays: the same 11 features per step)."""
         if self._gaze is None:
             p = os.path.join(self.root, "gaze_all.npz")
+            if not os.path.isfile(p) and {"gaze_grid", "poses_grid", "gaze_cpf"} <= set(self.arrays):
+                self._gaze = path_from_arrays(self.arrays, self.past_units * self.steps_per_unit)
+                return self._gaze
             if not os.path.isfile(p):
                 raise FileNotFoundError(f"{p} missing: run scripts/build_gaze_paths.py --out {self.root}")
             g = np.load(p)
@@ -94,6 +99,28 @@ class PackedBenchmark:
     def to_cartesian(self, a):
         """(..., *shape) -> (..., R, R, R) float (identity for Cartesian benchmarks)."""
         return np.asarray(a, np.float32) if self.grid is None else self.grid.to_cartesian(a, self.R)
+
+
+GAZE_LAYOUT = {"vectors": [[0, 3], [3, 6]], "pseudovectors": [[6, 9]], "n_features": 11}
+
+
+def path_from_arrays(arrays, steps):
+    """The gaze branch's input from a benchmark that stores per-sample poses and gaze (our builds): per observed step
+    (the first `steps` stored, i.e. the past window, oldest first) the features of scripts/build_gaze_paths.py:
+        0:3 gaze direction in the grid frame (anchor)    3:6 gaze direction in the CPF at that step (eye-in-head)
+        6:9 rotation from that step's CPF to the grid frame, as a rotation vector (rad)    9, 10 gaze / head valid
+    (every step of a sample is valid: windows with a gap are not built)."""
+    from scipy.spatial.transform import Rotation
+    g = arrays["gaze_grid"][:, :steps].astype(np.float64)
+    e = arrays["gaze_cpf"][:, :steps].astype(np.float64)
+    R = arrays["poses_grid"][:, :steps, :3, :3].astype(np.float64)
+    n = len(g)
+    out = np.zeros((n, steps, GAZE_LAYOUT["n_features"]), np.float32)
+    out[..., 0:3] = g / np.linalg.norm(g, axis=-1, keepdims=True)
+    out[..., 3:6] = e / np.linalg.norm(e, axis=-1, keepdims=True)
+    out[..., 6:9] = Rotation.from_matrix(R.reshape(-1, 3, 3)).as_rotvec().reshape(n, steps, 3)
+    out[..., 9:11] = 1.0
+    return out, dict(GAZE_LAYOUT)
 
 
 class SpanDataset(Dataset):
