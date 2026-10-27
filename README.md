@@ -307,6 +307,33 @@ python scripts/landing_eval.py --runs runs/fovs_aria_shift_sph/cv/ft_f4 \
     --lab-queries /data/SS/SS/Dynamic_Fusion_ALFA/data/traj_forecast/attention_shift/senses_suite/data_aea_lag.npz
 ```
 
+### On the lab's own questions (baseline rows for the lab's WHERE / WHEN tables)
+
+`build.window.anchor=lab` builds one sample per question of the lab's (from `scripts/lab_questions.py`), so the model
+is scored on exactly the lab's shifts and answers, not on the ones we detect (only ~37% of those match the lab's).
+`scripts/export_lab_probs.py` runs one model per CV fold on its own held-out location, maps the foveal map onto the
+lab's candidate directions and writes `probs_<name>.npz` in the lab's format (`gbf`, `gbf30` = nothing within 30 deg of
+the current gaze, `has` = covered questions), for `attention_where_metrics.py` (`WM_EXTRA`) and paired tests;
+`when` scores the lab's WHEN questions (AUC).
+
+```bash
+S=~/SensorySpotlight/data/traj_forecast/attention_shift
+python scripts/lab_questions.py where --suite $S/senses_suite --labels $S/labels --out data/lab_q/aea_where.npz
+python scripts/lab_questions.py when --forecast $S/forecast/aea.npz --out data/lab_q/aea_when.npz
+for k in where when; do
+  python scripts/build_dataset.py aea-server --config configs/fovs_aria_shift_sph.yaml \
+      --set build.window.anchor=lab build.window.questions=data/lab_q/aea_$k.npz \
+      --slam-root /data/SS/Aria_data/mps_slam --gaze-root /data/SS/Aria_data/gaze --cpf-root data/aea_cpf \
+      --out data/fovs_aria_labq_${k}_sph
+  python scripts/build_dataset.py pack --config configs/fovs_aria_shift_sph.yaml --out data/fovs_aria_labq_${k}_sph
+done
+# as trained (the forecasters of fovs_aria_sph.yaml, one per fold) / retrained: fine-tuned on the WHERE questions
+python scripts/export_lab_probs.py where --bench data/fovs_aria_labq_where_sph --suite $S/senses_suite \
+    --name gbf_astrained --runs runs/fovs_aria_sph/cv/sph_f{1,2,3,4,5}
+python scripts/export_lab_probs.py when --bench data/fovs_aria_labq_when_sph --out results/gbf_when_aea.npz \
+    --runs runs/fovs_aria_sph/cv/sph_f{1,2,3,4,5} --ours $S/baselines/when_ours_aea.npy
+```
+
 ### 3D scene features for the lab's WHERE model
 
 `scripts/export_where_geometry.py` turns a spherical shift benchmark into a per-direction input for the lab's WHERE

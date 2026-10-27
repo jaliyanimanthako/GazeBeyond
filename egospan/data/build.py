@@ -35,6 +35,7 @@ Choices the paper leaves open are parameters here (defaults in brackets):
                                                                                      forecast window]
     validation split                                                                [10 % of recordings per location]
 """
+import functools
 import glob
 import json
 import os
@@ -62,7 +63,10 @@ class WindowConfig:
                                       # "shift": one sample per attention shift (egospan/shifts.py), anchored
                                       # shift_lag_steps before the gaze leaves the fixation, target = the cones of the
                                       # landing fixation (the lab's WHERE question in our grids)
+                                      # "lab": one sample per question of the lab's own (scripts/lab_questions.py)
     shift_lag_steps: int = 3          # 0.3 s at 10 Hz, as the lab's `lag` queries
+    questions: str | None = None      # anchor "lab": the question file (.npz)
+    question_tol_s: float = 0.05      # anchor "lab": a question takes the gaze step nearest it, if this close
 
 
 def input_channels(win_cfg):
@@ -161,8 +165,10 @@ def extract_samples(streams, lift_cfg=None, win_cfg=None):
 
     if win_cfg.anchor == "shift":
         return extract_shift_samples(streams, lift_cfg, win_cfg)
+    if win_cfg.anchor == "lab":
+        return extract_lab_samples(streams, lift_cfg, win_cfg)
     if win_cfg.anchor != "window":
-        raise ValueError(f"window.anchor {win_cfg.anchor!r}: window | shift")
+        raise ValueError(f"window.anchor {win_cfg.anchor!r}: window | shift | lab")
     G = _Grids(streams, lift_cfg, win_cfg, lifter, sph)
     keys = ["X", "YF", "t0_us", "T_world_grid", "poses_grid", "gaze_grid", "gaze_cpf", "point_counts"]
     out = {k: [] for k in keys + (["YF_cart"] if sph is not None else [])}
@@ -318,6 +324,90 @@ def extract_shift_samples(streams, lift_cfg, win_cfg, shift_cfg=None):
     stored_win = dict(asdict(win_cfg), future_units=1)                      # the target is one unit: the landing
     arr["meta"] = np.array(json.dumps(dict(
         name=streams.name, lift=asdict(lift_cfg), window=stored_win, shift=asdict(shift_cfg),
+        vertical_axis=lifter.anchor(T_wc[0]).vertical_axis, recording=_jsonable(streams.meta))))
+    return arr
+
+
+@functools.lru_cache(maxsize=4)
+def load_questions(path):
+    """the lab's questions (scripts/lab_questions.py) as a dict of arrays; cached per process."""
+    with np.load(path) as z:
+        return {k: z[k] for k in z.files}
+
+
+def extract_lab_samples(streams, lift_cfg, win_cfg):
+    """One sample per question of the lab's (win_cfg.questions, from scripts/lab_questions.py: rec, t in s, qid), so a
+    model is scored on exactly the lab's questions and answers rather than on shifts we detect ourselves. The anchor is
+    the gaze step nearest t (within question_tol_s):
+        WHERE questions (the file has land_t0 / land_t1, land_world, from_world: the lab's landing fixation and the
+                        fixation left, world frame)  target = the cones of the landing fixation's steps (as anchor
+                        shift); land_dir / gaze_now in the anchor frame, shift_deg, land_t0_us / land_t1_us
+        WHEN questions  target = the union over each of the next future_units seconds (as anchor window)
+    plus qid (the question's id in the lab's files) and the usual pose / gaze arrays over the observed steps.
+    Questions without P valid, gap-free steps before them, or with no gaze step close enough, are skipped."""
+    from ..shifts import angle_deg, unit
+    Q = load_questions(win_cfg.questions)
+    where = "land_t0" in Q
+    rows = np.flatnonzero(Q["rec"].astype(str) == streams.name)
+    rows = rows[np.argsort(Q["t"][rows], kind="stable")]
+    R_align = gravity_alignment(streams.gravity_world) if lift_cfg.grid_frame == "world" else np.eye(3)
+    lifter = EgoSpanLift(lift_cfg, R_align)
+    sph = spherical_grid(lift_cfg)
+    if sph is not None and lift_cfg.grid_frame != "local":
+        raise ValueError("spherical grids are defined around the wearer's head: use grid_frame = local")
+    spu = win_cfg.steps_per_unit
+    P = win_cfg.past_units * spu
+    t, T_wc, gaze = streams.t_us, streams.T_world_cpf, streams.gaze_cpf
+    dt = np.median(np.diff(t)) if len(t) > 1 else 1e5
+    G = _Grids(streams, lift_cfg, win_cfg, lifter, sph)
+    keys = ["X", "YF", "t0_us", "T_world_grid", "poses_grid", "gaze_grid", "gaze_cpf", "point_counts", "qid"]
+    keys += ["land_dir", "gaze_now", "shift_deg", "land_t0_us", "land_t1_us"] if where else []
+    out = {k: [] for k in keys + (["YF_cart"] if sph is not None else [])}
+    for r in rows:
+        tq = Q["t"][r] * 1e6
+        k = int(np.clip(np.searchsorted(t, tq), 1, len(t) - 1))
+        q = k if abs(t[k] - tq) < abs(t[k - 1] - tq) else k - 1             # the nearest gaze step
+        if abs(t[q] - tq) > win_cfg.question_tol_s * 1e6:
+            continue
+        past = np.arange(q - P + 1, q + 1)
+        if past[0] < 0 or not streams.valid[past].all() or np.any(np.diff(t[past]) > win_cfg.max_gap_factor * dt):
+            continue
+        frame = lifter.anchor(T_wc[q])
+        counts = np.zeros((2, N_CHANNELS), np.int64)
+        X, counts[0] = G.past(frame, past)
+        if where:
+            t0, t1 = Q["land_t0"][r] * 1e6, Q["land_t1"][r] * 1e6
+            land = np.flatnonzero((t >= t0 - 1) & (t <= t1 + 1) & streams.valid)
+            if not len(land):                                                # a fixation shorter than our step
+                land = np.array([int(np.argmin(np.abs(t - t0)))])
+            YF, YFc, counts[1] = G.target(frame, [land])
+            out["land_dir"].append(unit(frame.dirs(Q["land_world"][r])).astype(np.float32))
+            out["gaze_now"].append(unit(frame.dirs(Q["from_world"][r])).astype(np.float32))
+            out["shift_deg"].append(np.float32(angle_deg(Q["from_world"][r], Q["land_world"][r])))
+            out["land_t0_us"].append(t[land[0]])
+            out["land_t1_us"].append(t[land[-1]])
+        else:
+            units = [np.arange(q + 1 + u * spu, min(q + 1 + (u + 1) * spu, len(t))) for u in range(win_cfg.future_units)]
+            YF, YFc, counts[1] = G.target(frame, units)
+        poses = frame.pose(T_wc[past])
+        out["X"].append(encode_inputs(X, win_cfg.soft))
+        out["YF"].append(np.packbits(YF.reshape(-1)))
+        if sph is not None:
+            out["YF_cart"].append(np.packbits(YFc.reshape(-1)))
+        out["t0_us"].append(t[q])
+        out["T_world_grid"].append(frame.matrix())
+        out["poses_grid"].append(poses.astype(np.float32))
+        out["gaze_grid"].append(np.einsum("sij,sj->si", poses[:, :3, :3], gaze[past]).astype(np.float32))
+        out["gaze_cpf"].append(gaze[past].astype(np.float32))
+        out["point_counts"].append(counts)
+        out["qid"].append(int(Q["qid"][r]))
+        G.steps.drop_before(q - P + 1)
+    if not out["X"]:
+        return None
+    arr = {k: np.stack(v) for k, v in out.items()}
+    stored_win = dict(asdict(win_cfg), future_units=1) if where else asdict(win_cfg)
+    arr["meta"] = np.array(json.dumps(dict(
+        name=streams.name, lift=asdict(lift_cfg), window=stored_win, lab_kind="where" if where else "when",
         vertical_axis=lifter.anchor(T_wc[0]).vertical_axis, recording=_jsonable(streams.meta))))
     return arr
 
