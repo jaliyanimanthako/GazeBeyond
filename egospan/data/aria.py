@@ -39,20 +39,35 @@ def T_device_cpf_from_online_calib(jsonl_path):
 
 # ------------------------------------------------------------------------------------------------- MPS parsing
 def _read_csv(src, usecols=None):
-    """src: a path, or (zip_path, member) for files inside an archive."""
+    """src: a path, (zip_path, member) for files inside an archive, or (zip_path, inner_zip, member) for a file inside
+    an archive inside an archive (HD-EPIC's eye gaze)."""
     import pandas as pd
     if isinstance(src, tuple):
-        zpath, member = src
-        with zipfile.ZipFile(zpath) as z, z.open(member) as f:
-            buf = io.BytesIO(f.read())
+        zpath, *inner, member = src
+        with zipfile.ZipFile(zpath) as z:
+            for name in inner:
+                z = zipfile.ZipFile(io.BytesIO(z.read(name)))
+            buf = io.BytesIO(z.read(member))
         return pd.read_csv(buf, compression="gzip" if member.endswith(".gz") else None, usecols=usecols)
     return pd.read_csv(src, usecols=usecols)
 
 
-def read_gaze_pose(gaze_src, trajectory_src, T_device_cpf):
-    """Eye gaze and head pose on the gaze timeline, without the (large) SLAM points.
+def _zip_member(zpath, suffix):
+    """the one member of the archive whose name ends with `suffix` (layouts differ between releases)."""
+    with zipfile.ZipFile(zpath) as z:
+        hits = [n for n in z.namelist() if n.endswith(suffix)]
+    if len(hits) != 1:
+        raise FileNotFoundError(f"{zpath}: {len(hits)} members ending with {suffix}")
+    return hits[0]
+
+
+def read_gaze_pose(gaze_src, trajectory_src, T_device_cpf, gaze_rows=None):
+    """Eye gaze and head pose on the gaze timeline, without the (large) SLAM points. gaze_rows: optional function
+    (gaze table -> row indices) that picks the gaze samples to keep, e.g. to bring 30 / 60 Hz gaze to 10 Hz.
     Returns (t_us, gaze_cpf (n, 3), T_world_cpf (n, 4, 4), pose_ok (n,), gravity_world or None)."""
     G = _read_csv(gaze_src)
+    if gaze_rows is not None:
+        G = G.iloc[gaze_rows(G)].reset_index(drop=True)
     tg = G["tracking_timestamp_us"].to_numpy(np.int64)
     if "yaw_rads_cpf" in G:
         yaw = G["yaw_rads_cpf"].to_numpy()
@@ -78,9 +93,9 @@ def read_gaze_pose(gaze_src, trajectory_src, T_device_cpf):
     return tg, gaze, T_world_cpf, pose_ok, gravity
 
 
-def read_mps(name, gaze_src, trajectory_src, points_src, observations_src, T_device_cpf, meta=None):
+def read_mps(name, gaze_src, trajectory_src, points_src, observations_src, T_device_cpf, meta=None, gaze_rows=None):
     """Synchronise MPS streams on the eye-gaze timeline."""
-    tg, gaze, T_world_cpf, pose_ok, gravity = read_gaze_pose(gaze_src, trajectory_src, T_device_cpf)
+    tg, gaze, T_world_cpf, pose_ok, gravity = read_gaze_pose(gaze_src, trajectory_src, T_device_cpf, gaze_rows)
     Pt = _read_csv(points_src)
     uids = Pt["uid"].to_numpy(np.int64)
     xyz = Pt[["px_world", "py_world", "pz_world"]].to_numpy(np.float32)
@@ -187,3 +202,102 @@ def restrict_to_segments(streams, segments_s):
         inside |= (t >= a) & (t <= b)
     streams.valid = streams.valid & inside
     return streams
+
+
+# ------------------------------------------------------------------------------------------------- HD-EPIC, ADT (lab)
+# Both follow the lab's (SensorySpotlight) timelines exactly, so `build.window.anchor=lab` finds each question's step.
+# Aria's nominal device -> CPF transform (the lab's, used where no per-recording calibration exists).
+T_DEVICE_CPF_NOMINAL = np.array([[-0.0319, -0.9986, -0.0415, 0.005], [0.7934, 0.0, -0.6088, -0.0491],
+                                 [0.6079, -0.0523, 0.7923, -0.0492], [0, 0, 0, 1.0]])
+T_DEVICE_CPF_ADT = T_DEVICE_CPF_NOMINAL.copy()
+T_DEVICE_CPF_ADT[:3, 3] = [0.005, -0.0515, -0.0499]            # the lab's ADT pipeline (adt_pipeline.py T_DEV_CPF)
+
+
+def list_hdepic(slam_root):
+    """(rec, participant, multi-session zip, session id) for every recording whose kitchen SLAM zip is complete
+    (<slam_root>/P0*/SLAM/multi/vrs_to_multi_slam.json; <i>.zip.ok marks a finished download), as the lab's
+    hdepic_fix3d.recordings()."""
+    out = []
+    for m in sorted(glob.glob(os.path.join(slam_root, "P0*", "SLAM", "multi", "vrs_to_multi_slam.json"))):
+        P = m.split(os.sep)[-4]
+        for vrs, i in json.load(open(m)).items():
+            z = os.path.join(os.path.dirname(m), f"{i}.zip")
+            if os.path.isfile(z + ".ok"):
+                out.append((os.path.basename(vrs)[:-4], P, z, str(i)))
+    return out
+
+
+def read_hdepic(raw_root, rec, P, zpath, i, location):
+    """HD-EPIC recording `rec` of participant P: eye gaze from raw/HD-EPIC_GAZE/<P>/GAZE_HAND.zip (a zip per recording
+    inside), pose / points / observations from the kitchen's multi-session SLAM zip (session i), so all recordings of a
+    kitchen share one world frame. Gaze at 60 Hz is brought to 10 Hz by keeping every k-th sample from the first, as
+    the lab does; T_device_cpf from HD-EPIC_INTERMEDIATE/<P>/<rec>/device_calibration.json, nominal otherwise.
+    location: the lab's held-out group (the kitchen)."""
+    cal = os.path.join(raw_root, "HD-EPIC_INTERMEDIATE", P, rec, "device_calibration.json")
+    T = np.array(json.load(open(cal))["origin_transforms"]["T_device_cpf"]) if os.path.isfile(cal) \
+        else T_DEVICE_CPF_NOMINAL
+
+    def every_100ms(G):
+        tg = G["tracking_timestamp_us"].to_numpy()
+        return np.arange(0, len(G), max(1, int(round(0.1 / np.median(np.diff(tg) / 1e6)))))
+    return read_mps(rec,
+                    gaze_src=(os.path.join(raw_root, "HD-EPIC_GAZE", P, "GAZE_HAND.zip"), f"GAZE_HAND/mps_{rec}_vrs.zip",
+                              f"mps_{rec}_vrs/eye_gaze/general_eye_gaze.csv"),
+                    trajectory_src=(zpath, f"{i}/slam/closed_loop_trajectory.csv"),
+                    points_src=(zpath, f"{i}/slam/semidense_points.csv.gz"),
+                    observations_src=(zpath, f"{i}/slam/semidense_observations.csv.gz"),
+                    T_device_cpf=T, gaze_rows=every_100ms,
+                    meta={"dataset": "hdepic", "location": int(location), "participant": P})
+
+
+def list_adt(root):
+    """ADT sequences in `root` (the lab's selective download, tools/adt_download.py) that have their SLAM points
+    (--groups mps_slam_points; not part of the lab's default download)."""
+    return sorted(s for s in os.listdir(root) if s.startswith("Apartment")
+                  and glob.glob(os.path.join(root, s, "*mps_slam_points*.zip")))
+
+
+def lab_to_slam_rotation(gt_src, trajectory_src, max_spread_deg=2.0):
+    """ADT's ground truth (the lab's world frame) and MPS SLAM (ours) are different world frames: the rotation taking
+    ground-truth world directions into the SLAM world, from the two device trajectories at the same timestamps
+    (R_slam R_gt^T per pose, averaged on SO(3)). Raises if the poses disagree by more than max_spread_deg."""
+    cols = ["tracking_timestamp_us", "qx_world_device", "qy_world_device", "qz_world_device", "qw_world_device"]
+    A, B = _read_csv(gt_src, usecols=cols), _read_csv(trajectory_src, usecols=cols)
+    ta, tb = A["tracking_timestamp_us"].to_numpy(np.int64), B["tracking_timestamp_us"].to_numpy(np.int64)
+    j = np.clip(np.searchsorted(ta, tb), 1, len(ta) - 1)
+    j -= (tb - ta[j - 1]) < (ta[j] - tb)
+    ok = np.abs(ta[j] - tb) < POSE_TOL_US
+    if ok.sum() < 10:
+        raise ValueError("too few ground-truth poses at the SLAM timestamps")
+    Ra, Rb = quat_to_rotmat(A[cols[1:]].to_numpy(float)[j[ok]]), quat_to_rotmat(B[cols[1:]].to_numpy(float)[ok])
+    Rs = Rb @ np.swapaxes(Ra, 1, 2)
+    U, _, Vt = np.linalg.svd(Rs.mean(0))
+    R = U @ np.diag([1, 1, np.linalg.det(U @ Vt)]) @ Vt
+    spread = np.degrees(np.arccos(np.clip((np.trace(np.swapaxes(Rs, 1, 2) @ R, axis1=1, axis2=2) - 1) / 2, -1, 1)))
+    if np.median(spread) > max_spread_deg:
+        raise ValueError(f"ground-truth and SLAM poses disagree: median {np.median(spread):.1f} deg after alignment")
+    return R
+
+
+def read_adt(root, seq, location):
+    """ADT sequence `seq`: the ground-truth eye gaze (the lab's answers come from it), taken as the lab does: every 3rd
+    30 Hz sample from the first with a depth hit; pose, points and observations from MPS SLAM (one consistent frame;
+    the eye gaze is in the CPF, so it needs no world frame). T_device_cpf as the lab's ADT pipeline. The lab's world
+    directions (ground-truth frame) are mapped into ours with meta["R_slam_from_lab"] (lab_to_slam_rotation).
+    location: the lab's held-out group (the session fold)."""
+    d = os.path.join(root, seq)
+    one = lambda pat: _first([os.path.join(d, pat)])                     # noqa: E731
+    gt, traj, pts = one("*_main_groundtruth.zip"), one("*mps_slam_trajectories*.zip"), one("*mps_slam_points*.zip")
+
+    def lab_steps(G):
+        k = np.flatnonzero(G["depth_m"].to_numpy() > 0)
+        return np.arange(k[0] if len(k) else 0, len(G), 3)
+    traj_src = (traj, _zip_member(traj, "closed_loop_trajectory.csv"))
+    R = lab_to_slam_rotation((gt, "aria_trajectory.csv"), traj_src)
+    return read_mps(seq,
+                    gaze_src=(gt, "eyegaze.csv"),
+                    trajectory_src=traj_src,
+                    points_src=(pts, _zip_member(pts, "semidense_points.csv.gz")),
+                    observations_src=(pts, _zip_member(pts, "semidense_observations.csv.gz")),
+                    T_device_cpf=T_DEVICE_CPF_ADT, gaze_rows=lab_steps,
+                    meta={"dataset": "adt", "location": int(location), "R_slam_from_lab": R.tolist()})

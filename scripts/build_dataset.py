@@ -18,6 +18,13 @@ Step 2 - pack: concatenate into <out>/all.npz and write <out>/splits.npz (train/
     python scripts/build_dataset.py dummy-aea --out data/dummy_aea --n 15
     python scripts/build_dataset.py aea --config configs/dummy.yaml --src data/dummy_aea --out data/dummy_fovs
 
+    # HD-EPIC and ADT on the lab's (SensorySpotlight) questions: --folds maps each recording to the lab's held-out group
+    # (tools/export_gbf_folds.py there), used as its "location", so location-wise CV folds = the lab's folds
+    python scripts/build_dataset.py hdepic --config configs/fovs_aria_shift.yaml --folds data/lab_q/hdepic_where_folds.json \
+        --slam-root /data/disk2/hdepic_dinithi/HD-EPIC/SLAM-and-Gaze --src /data/disk2/hdepic/HD-EPIC/raw --out ...
+    python scripts/build_dataset.py adt --config configs/fovs_aria_shift.yaml --folds data/lab_q/adt_where_folds.json \
+        --src /data/disk2/adt --out ...
+
     # synthetic recordings built directly (skips the file format; for smoke tests)
     python scripts/build_dataset.py synthetic --out data/synthetic --n 12
     python scripts/build_dataset.py pack --out data/synthetic --set build.pack.min_points_sigma=null
@@ -53,6 +60,13 @@ def _extract_one(job, build_cfg, out_dir):
                 return name, f"SKIPPED: no {cpf} (run scripts/derive_device_cpf.py)"
             T = np.array(json.load(open(cpf))["T_device_cpf"])
             streams = read_aea_server(build_cfg["slam_root"], build_cfg["gaze_root"], name, T)
+        elif kind == "hdepic":
+            from egospan.data.aria import read_hdepic
+            P, zpath, i, loc = arg
+            streams = read_hdepic(build_cfg["src"], name, P, zpath, i, loc)
+        elif kind == "adt":
+            from egospan.data.aria import read_adt
+            streams = read_adt(build_cfg["src"], name, arg)
         elif kind == "egoexo":
             from egospan.data.aria import read_egoexo, restrict_to_segments
             take_dir, meta, segments = arg
@@ -88,11 +102,13 @@ def _egoexo_jobs(src, takes_json, segments_json):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["aea", "aea-server", "egoexo", "synthetic", "dummy-aea", "pack"])
+    ap.add_argument("cmd", choices=["aea", "aea-server", "hdepic", "adt", "egoexo", "synthetic", "dummy-aea",
+                                         "pack"])
     ap.add_argument("--config")
     ap.add_argument("--set", nargs="*", default=[], help="overrides, e.g. build.lift.resolution=32")
-    ap.add_argument("--src", help="AEA download folder, or Ego-Exo4D takes/ folder")
-    ap.add_argument("--slam-root", help="aea-server: folder with <rec>_mps_slam_*.zip")
+    ap.add_argument("--src", help="AEA download folder, Ego-Exo4D takes/ folder, HD-EPIC raw/ folder or ADT folder")
+    ap.add_argument("--slam-root", help="aea-server: folder with <rec>_mps_slam_*.zip; hdepic: SLAM-and-Gaze/")
+    ap.add_argument("--folds", help="hdepic / adt: json {recording: the lab's held-out group}; others are skipped")
     ap.add_argument("--gaze-root", help="aea-server: folder with <rec>/mps/eye_gaze/ and <rec>/metadata.json")
     ap.add_argument("--cpf-root", help="aea-server: folder with <rec>.json from scripts/derive_device_cpf.py")
     ap.add_argument("--out", required=True)
@@ -121,6 +137,17 @@ def main():
     elif a.cmd == "aea-server":
         from egospan.data.aria import list_aea_server
         jobs = [("aea-server", r, None) for r in list_aea_server(a.slam_root)]
+    elif a.cmd in ("hdepic", "adt"):
+        if not (a.folds and a.src):
+            ap.error(f"{a.cmd} needs --folds and --src")
+        folds = json.load(open(a.folds))
+        if a.cmd == "hdepic":
+            from egospan.data.aria import list_hdepic
+            jobs = [("hdepic", r, (P, z, i, folds[r])) for r, P, z, i in list_hdepic(a.slam_root) if r in folds]
+        else:
+            from egospan.data.aria import list_adt
+            jobs = [("adt", r, folds[r]) for r in list_adt(a.src) if r in folds]
+        print(f"{len(jobs)} of the {len(folds)} recordings in {a.folds} have their files", flush=True)
     elif a.cmd == "egoexo":
         jobs = _egoexo_jobs(a.src, a.takes_json, a.segments)
     else:

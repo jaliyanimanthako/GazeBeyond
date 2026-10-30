@@ -4,7 +4,9 @@ Per sample the lab stores a frozen V-JEPA 2 token map of the last ~0.4 s of RGB 
 vjepa_{part}.npz / vjepa_all.npz: map (n, 128, 16, 16) fp16, glob (n, 1024), has (n,)). Lifting: every voxel of the
 anchor-CPF grid takes the token of the image cell its centre projects into, using the lab's fitted mapping from CPF
 azimuth / elevation to normalised preview-image coordinates
-    u = 0.515 - 0.00754 az,   v = 0.451 - 0.00784 el    (degrees)
+    u = 0.515 - 0.00754 az,   v = 0.451 - 0.00784 el    (degrees; AEA and ADT)
+HD-EPIC's camera sits differently: its own fit (the lab's CAMERA["hdepic"], attention_where_senses.py), chosen by the
+benchmark's dataset (camera_of).
 Voxels behind the wearer or outside the image get zeros; an in-view mask channel says which voxels can be seen.
 This needs grids in the anchor CPF frame (grid_frame = local, as in the lab's data and our lab rebuild).
 """
@@ -12,35 +14,47 @@ import numpy as np
 
 KX, KY, X0, Y0 = -0.00754, -0.00784, 0.515, 0.451
 TOKENS = 16                                   # image cells per side
+# (u0, du/daz, du/del, v0, dv/daz, dv/del), degrees -> normalised image coordinates, as the lab's CAMERA
+CAMERA = {"default": (X0, KX, 0.0, Y0, 0.0, KY), "hdepic": (0.5689, -0.00784, 0.00031, 0.4523, 0.00005, -0.00827)}
 
 
-def lift_index(resolution=16, cube_size=3.2, tokens=TOKENS):
+def camera_of(meta):
+    """the camera mapping of a benchmark (its meta, as stored by pack): HD-EPIC's own, the AEA / ADT one otherwise."""
+    return CAMERA.get(str(meta.get("dataset", "")), CAMERA["default"])
+
+
+def _uv(az, el, camera):
+    u0, ua, ue, v0, va, ve = camera
+    return u0 + ua * az + ue * el, v0 + va * az + ve * el
+
+
+def lift_index(resolution=16, cube_size=3.2, tokens=TOKENS, camera=CAMERA["default"]):
     """(R^3,) token index (0 .. tokens^2 - 1) of the image cell each voxel centre projects into, -1 if not visible.
     Voxel order = C order over (x, y, z) of the CPF grid, as everywhere else."""
     c = (np.arange(resolution) + 0.5) * (cube_size / resolution) - cube_size / 2
     x, y, z = np.meshgrid(c, c, c, indexing="ij")
     r = np.sqrt(x ** 2 + y ** 2 + z ** 2)
     az, el = np.degrees(np.arctan2(x, z)), np.degrees(np.arcsin(y / r))
-    u, v = X0 + KX * az, Y0 + KY * el
+    u, v = _uv(az, el, camera)
     ok = (z > 0) & (u >= 0) & (u < 1) & (v >= 0) & (v < 1)
     idx = np.floor(v * tokens).astype(int) * tokens + np.floor(u * tokens).astype(int)
     return np.where(ok, idx, -1).reshape(-1)
 
 
-def image_cell(points, tokens=TOKENS):
+def image_cell(points, tokens=TOKENS, camera=CAMERA["default"]):
     """(N, 3) points in the anchor CPF frame -> (N,) token index of the image cell they project into, -1 if unseen."""
     x, y, z = np.moveaxis(np.asarray(points, float), -1, 0)
     r = np.sqrt(x ** 2 + y ** 2 + z ** 2)
     az, el = np.degrees(np.arctan2(x, z)), np.degrees(np.arcsin(np.clip(y / np.maximum(r, 1e-12), -1, 1)))
-    u, v = X0 + KX * az, Y0 + KY * el
+    u, v = _uv(az, el, camera)
     ok = (z > 0) & (u >= 0) & (u < 1) & (v >= 0) & (v < 1)
     idx = np.floor(v * tokens).astype(int) * tokens + np.floor(u * tokens).astype(int)
     return np.where(ok, idx, -1)
 
 
-def lift_index_spherical(grid, tokens=TOKENS):
+def lift_index_spherical(grid, tokens=TOKENS, camera=CAMERA["default"]):
     """(cells,) token index of every spherical cell's centre direction, -1 if not in the camera image."""
-    return image_cell(grid.centers().reshape(-1, 3), tokens)
+    return image_cell(grid.centers().reshape(-1, 3), tokens, camera)
 
 
 def lift(token_map, index, resolution=16):

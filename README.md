@@ -334,6 +334,15 @@ python scripts/export_lab_probs.py when --bench data/fovs_aria_labq_when_sph --o
     --runs runs/fovs_aria_sph/cv/sph_f{1,2,3,4,5} --ours $S/baselines/when_ours_aea.npy
 ```
 
+**ADT and HD-EPIC** (`build_dataset.py adt | hdepic`, readers in `egospan/data/aria.py`) follow the lab's timelines
+(HD-EPIC gaze at 10 Hz as the lab subsamples it; ADT's ground-truth gaze, every 3rd 30 Hz sample) and take the lab's
+held-out groups as locations (`--folds`, from SensorySpotlight's `tools/export_gbf_folds.py`), so the location-wise CV
+folds are the lab's. ADT needs its MPS SLAM points (not in the lab's download); its ground-truth world frame is mapped
+onto the SLAM frame per sequence. Video tokens use HD-EPIC's own camera mapping. `export_lab_probs.py --eval-folds`
+scores a model trained on another dataset (the AEA model, "as released") on every fold; `when --forecast` adds the
+lead-time AUC, `--ours <file>.npz:<key>` compares with the lab's final WHEN model, `--reuse` rescores saved scores.
+`scripts/run_lab_more.sh` runs all of it (ADT / HD-EPIC WHERE and WHEN, WHEN retrained on all three datasets).
+
 ### 3D scene features for the lab's WHERE model
 
 `scripts/export_where_geometry.py` turns a spherical shift benchmark into a per-direction input for the lab's WHERE

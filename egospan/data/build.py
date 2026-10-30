@@ -350,6 +350,7 @@ def extract_lab_samples(streams, lift_cfg, win_cfg):
     where = "land_t0" in Q
     rows = np.flatnonzero(Q["rec"].astype(str) == streams.name)
     rows = rows[np.argsort(Q["t"][rows], kind="stable")]
+    R_lab = np.asarray(streams.meta.get("R_slam_from_lab", np.eye(3)), float)   # the lab's world -> ours (ADT)
     R_align = gravity_alignment(streams.gravity_world) if lift_cfg.grid_frame == "world" else np.eye(3)
     lifter = EgoSpanLift(lift_cfg, R_align)
     sph = spherical_grid(lift_cfg)
@@ -381,8 +382,8 @@ def extract_lab_samples(streams, lift_cfg, win_cfg):
             if not len(land):                                                # a fixation shorter than our step
                 land = np.array([int(np.argmin(np.abs(t - t0)))])
             YF, YFc, counts[1] = G.target(frame, [land])
-            out["land_dir"].append(unit(frame.dirs(Q["land_world"][r])).astype(np.float32))
-            out["gaze_now"].append(unit(frame.dirs(Q["from_world"][r])).astype(np.float32))
+            out["land_dir"].append(unit(frame.dirs(R_lab @ Q["land_world"][r])).astype(np.float32))
+            out["gaze_now"].append(unit(frame.dirs(R_lab @ Q["from_world"][r])).astype(np.float32))
             out["shift_deg"].append(np.float32(angle_deg(Q["from_world"][r], Q["land_world"][r])))
             out["land_t0_us"].append(t[land[0]])
             out["land_t1_us"].append(t[land[-1]])
@@ -551,6 +552,7 @@ def pack(recs_dir, out_dir, cfg=None):
     split = assign_splits(rec, location, cfg)
     common = dict(metas[0])
     common.pop("name"), common.pop("recording")
+    common["dataset"] = str(metas[0]["recording"].get("dataset", ""))      # e.g. the camera mapping for video features
     os.makedirs(out_dir, exist_ok=True)
     np.savez(os.path.join(out_dir, "all.npz"), **allz, rec=rec, location=location, category=category, split=split,
              meta=np.array(json.dumps(common)))

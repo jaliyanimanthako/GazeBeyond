@@ -7,7 +7,9 @@ exported in the lab's format so they are scored with the lab's WHERE table and p
         --runs runs/fovs_aria_sph/cv/sph_f{1,2,3,4,5} [--compare probs_<our run>.npz:mem+video]
     # WHEN (a benchmark built from the WHEN questions):
     python scripts/export_lab_probs.py when --bench data/fovs_aria_labq_when_sph --runs ... --out results/gbf_when_aea.npz \
-        [--ours ~/SensorySpotlight/data/traj_forecast/attention_shift/baselines/when_ours_aea.npy]
+        [--ours ~/SensorySpotlight/data/traj_forecast/attention_shift/baselines/when_ours_aea.npy] \
+        [--forecast ~/SensorySpotlight/data/traj_forecast/attention_shift/forecast/aea.npz] [--reuse]
+    # --forecast adds the lead-time AUC; --reuse rescores the scores already in --out without running the model
 
 WHERE. The run's --level map (foveal by default; sigmoid per cell, seen from the anchor = the eye at the question)
 becomes a probability over the lab's candidate directions (--grid sph: the 960 spherical cells, elevation-major as
@@ -88,26 +90,32 @@ class CellsToCandidates:
         return p / p.sum(1, keepdims=True)
 
 
-def run_predictions(bench, runs, level, device, batch_size):
+def run_predictions(bench, runs, level, device, batch_size, eval_folds=None):
     """-> (probabilities (samples, cells) of `level`, covered (samples,) bool): every run predicts the test split of
-    its own CV fold, so each sample is scored by the model that never saw its location."""
+    its own CV fold, so each sample is scored by the model that never saw its location. eval_folds: a model trained on
+    another dataset (e.g. AEA's, on HD-EPIC / ADT) never saw any of this benchmark: one run then predicts the test
+    split of each of these folds of the benchmark."""
     out = np.zeros((len(bench.arrays["X"]), int(np.prod(bench.shape))), np.float32)
     covered = np.zeros(len(out), bool)
-    for run in runs:
+    if eval_folds and len(runs) != 1:
+        raise SystemExit("--eval-folds takes one run (a model trained on another dataset)")
+    jobs = [(runs[0], f) for f in eval_folds] if eval_folds else [(r, None) for r in runs]
+    for run, fold in jobs:
         model, cfg = load_run(run, device)
         if level not in cfg.data.levels:
             raise SystemExit(f"{run} does not predict the {level} level ({cfg.data.levels})")
-        ds = SpanDataset(bench, "test", fold=cfg.data.fold, levels=cfg.data.levels, crop_front=cfg.data.crop_front,
+        fold = cfg.data.fold if fold is None else fold
+        ds = SpanDataset(bench, "test", fold=fold, levels=cfg.data.levels, crop_front=cfg.data.crop_front,
                          crop_target=False, gaze_paths=cfg.data.gaze_paths, video=cfg.data.video_features)
         p, _ = predict(model, ds, device, batch_size, cfg.train.amp, desc=os.path.basename(run))
         if tuple(p.shape[2:]) != tuple(bench.shape):
             raise SystemExit(f"{run} predicts {p.shape[2:]} cells, the benchmark has {bench.shape}: build it with the "
                              "run's grid settings")
         if covered[ds.idx].any():
-            raise SystemExit(f"{run} (fold {cfg.data.fold}) overlaps another run's test samples")
+            raise SystemExit(f"{run} (fold {fold}) overlaps another run's test samples")
         out[ds.idx] = p[:, cfg.data.levels.index(level)].reshape(len(p), -1)
         covered[ds.idx] = True
-        print(f"{run}: fold {cfg.data.fold}, {len(ds.idx)} samples", flush=True)
+        print(f"{run}: fold {fold}, {len(ds.idx)} samples", flush=True)
     return out, covered
 
 
@@ -149,7 +157,7 @@ def where(a, bench, device):
           f"{err:.2f} deg with axes {'unchanged' if np.allclose(M, np.eye(3)) else M.tolist()}")
     if err > a.max_frame_err:
         raise SystemExit(f"the frames disagree ({err:.1f} deg > {a.max_frame_err})")
-    prob, covered = run_predictions(bench, a.runs, a.level, device, a.batch_size)
+    prob, covered = run_predictions(bench, a.runs, a.level, device, a.batch_size, a.eval_folds)
     conv = CellsToCandidates(cell_dirs(bench, bench.shape) @ M, a.grid)  # ours = M @ lab -> lab = ours @ M (rows)
     C, area = conv.C, conv.area
     raw = np.tile(area / area.sum(), (n_q, 1))
@@ -204,35 +212,56 @@ def when(a, bench, device):
     qf = a.questions or bench.meta["window"].get("questions")
     if not qf or not os.path.isfile(qf):
         raise SystemExit(f"the WHEN questions file ({qf}) is missing: pass --questions")
-    Q = np.load(qf)
-    y_of = dict(zip(Q["qid"].astype(int), Q["y"]))
-    prob, covered = run_predictions(bench, a.runs, a.level, device, a.batch_size)
-    s = np.flatnonzero(covered)
-    dirs = cell_dirs(bench, bench.shape)
-    g = unit(bench.arrays["gaze_grid"][s, -1].astype(np.float64))      # the gaze at the anchor, anchor frame
-    away = (g @ dirs.T) <= np.cos(np.radians(30))
-    p = prob[s].astype(np.float64)
-    score_max = np.where(away, p, 0).max(1)
-    score_share = np.where(away, p, 0).sum(1) / np.maximum(p.sum(1), 1e-12)
-    qid = bench.arrays["qid"][s].astype(int)
-    y = np.array([y_of[q] for q in qid], bool)
-    recs = bench.arrays["rec"].astype(str)[s]
-    os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
-    np.savez(a.out, qid=qid, rec=recs, y=y, score_max=score_max, score_share=score_share)
-    print(f"wrote {a.out}: {len(s)} WHEN questions, {y.mean():.1%} positive")
+    if a.reuse and os.path.isfile(a.out):                               # scores already written: rescore only
+        R = np.load(a.out)
+        qid, recs, y, score_max, score_share = (R[k] for k in ("qid", "rec", "y", "score_max", "score_share"))
+        print(f"read {a.out}: {len(qid)} WHEN questions, {y.mean():.1%} positive")
+    else:
+        if not a.runs:
+            raise SystemExit("when needs --runs (or --reuse with an existing --out)")
+        Q = np.load(qf)
+        y_of = dict(zip(Q["qid"].astype(int), Q["y"]))
+        prob, covered = run_predictions(bench, a.runs, a.level, device, a.batch_size, a.eval_folds)
+        s = np.flatnonzero(covered)
+        dirs = cell_dirs(bench, bench.shape)
+        g = unit(bench.arrays["gaze_grid"][s, -1].astype(np.float64))  # the gaze at the anchor, anchor frame
+        away = (g @ dirs.T) <= np.cos(np.radians(30))
+        p = prob[s].astype(np.float64)
+        score_max = np.where(away, p, 0).max(1)
+        score_share = np.where(away, p, 0).sum(1) / np.maximum(p.sum(1), 1e-12)
+        qid = bench.arrays["qid"][s].astype(int)
+        y = np.array([y_of[q] for q in qid], bool)
+        recs = bench.arrays["rec"].astype(str)[s]
+        os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
+        np.savez(a.out, qid=qid, rec=recs, y=y, score_max=score_max, score_share=score_share)
+        print(f"wrote {a.out}: {len(s)} WHEN questions, {y.mean():.1%} positive")
     rows = {"gbf, max >= 30 deg away": score_max, "gbf, share >= 30 deg away": score_share}
-    if a.ours:
-        rows["ours (--ours)"] = np.load(a.ours)[qid]
+    if a.ours:                                                         # .npy, or <file>.npz:<key>
+        f, _, key = a.ours.partition(".npz:")
+        rows["ours (--ours)"] = (np.load(f + ".npz")[key] if key else np.load(a.ours))[qid]
+    lead = None
+    if a.forecast:                                                     # the lab's lead-time AUC: a shift 0.3-1.3 s
+        D = np.load(a.forecast)                                        # ahead, on moments with none in the next 0.3 s
+        lt = D["y_near"][qid] == 0
+        lead = (lt, D["y_far"][qid].astype(bool))
+        print(f"  lead time: {lt.sum()} of {len(qid)} questions with no shift in the next 0.3 s, "
+              f"{lead[1][lt].mean():.1%} positive")
     for name, sc in rows.items():
         ci = boot_ci(lambda b: auc(y[b], sc[b]), recs, n=200)
-        print(f"  {name:>28}: AUC {auc(y, sc):.3f} [{ci[0]:.3f}, {ci[1]:.3f}]")
+        line = f"  {name:>28}: AUC {auc(y, sc):.3f} [{ci[0]:.3f}, {ci[1]:.3f}]"
+        if lead is not None:
+            lt, yf = lead
+            k = np.flatnonzero(lt)
+            ci = boot_ci(lambda b: auc(yf[k][b], sc[k][b]), recs[k], n=200)
+            line += f", lead-time AUC {auc(yf[k], sc[k]):.3f} [{ci[0]:.3f}, {ci[1]:.3f}]"
+        print(line)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("kind", choices=("where", "when"))
     ap.add_argument("--bench", required=True, help="a benchmark built with build.window.anchor=lab")
-    ap.add_argument("--runs", nargs="+", required=True, help="trained runs, one per CV fold")
+    ap.add_argument("--runs", nargs="+", help="trained runs, one per CV fold")
     ap.add_argument("--level", default="foveal")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--device", default="auto")
@@ -244,11 +273,18 @@ def main():
     ap.add_argument("--compare", nargs="*", default=[],
                     help="where: <probs file(s) in suite, comma-separated: seeds pooled>:<variant>, paired")
     ap.add_argument("--questions", help="when: the WHEN questions file (default: the one the benchmark was built from)")
-    ap.add_argument("--ours", help="when: the lab's WHEN scores, one per forecast row (.npy)")
+    ap.add_argument("--ours", help="when: the lab's WHEN scores, one per forecast row (.npy, or <file>.npz:<key>, e.g. "
+                    "forecast/when_v4_aea.npz:gru_ens = the final model)")
+    ap.add_argument("--eval-folds", type=int, nargs="+",
+                    help="one run trained on another dataset (e.g. AEA's) scores the test split of each of these folds")
     ap.add_argument("--out", help="when: output .npz")
+    ap.add_argument("--forecast", help="when: the lab's forecast/<ds>.npz, adds the lead-time AUC (y_near / y_far)")
+    ap.add_argument("--reuse", action="store_true", help="when: rescore the scores already in --out (no model run)")
     a = ap.parse_args()
     if a.kind == "where" and not a.suite:
         ap.error("where needs --suite")
+    if a.kind == "where" and not a.runs:
+        ap.error("where needs --runs")
     if a.kind == "when" and not a.out:
         ap.error("when needs --out")
     bench = PackedBenchmark(a.bench)

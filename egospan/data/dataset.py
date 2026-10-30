@@ -40,7 +40,7 @@ class PackedBenchmark:
     def video(self):
         """Camera token maps per sample (scripts/attach_video_features.py) and the voxel -> image-cell lift index."""
         if self._video is None:
-            from ..video import lift_index, lift_index_spherical
+            from ..video import camera_of, lift_index, lift_index_spherical
             p = os.path.join(self.root, "video_all.npz")
             if not os.path.isfile(p):
                 raise FileNotFoundError(f"{p} missing: run scripts/attach_video_features.py --bench {self.root}")
@@ -50,8 +50,9 @@ class PackedBenchmark:
             z = np.load(p)
             if len(z["map"]) != len(self.arrays["X"]) or not np.array_equal(z["rec"], self.arrays["rec"]):
                 raise ValueError(f"{p} is not aligned with all.npz: re-run attach_video_features.py")
-            index = (lift_index_spherical(self.grid) if self.grid is not None
-                     else lift_index(self.R, self.meta["lift"]["cube_size"]))
+            cam = camera_of(self.meta)
+            index = (lift_index_spherical(self.grid, camera=cam) if self.grid is not None
+                     else lift_index(self.R, self.meta["lift"]["cube_size"], camera=cam))
             self._video = (z["map"], index)
         return self._video
 
