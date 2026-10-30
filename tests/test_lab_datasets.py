@@ -68,7 +68,7 @@ def test_hdepic_reader(tmp_path):
     _zip(str(raw / "HD-EPIC_GAZE" / P / "GAZE_HAND.zip"), {f"GAZE_HAND/mps_{rec}_vrs.zip": inner.getvalue()})
     cal = raw / "HD-EPIC_INTERMEDIATE" / P / rec / "device_calibration.json"
     cal.parent.mkdir(parents=True)
-    cal.write_text(json.dumps({"origin_transforms": {"T_device_cpf": T_DEVICE_CPF.tolist()}}))
+    cal.write_text(json.dumps({"origin_transforms": {"T_device_cpf": T_DEVICE_CPF[:3].tolist()}}))   # 3 x 4 [R | t]
 
     jobs = list_hdepic(str(slam))
     assert [j[0] for j in jobs] == [rec]                                       # the unfinished zip is left out

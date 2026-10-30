@@ -234,8 +234,9 @@ def read_hdepic(raw_root, rec, P, zpath, i, location):
     the lab does; T_device_cpf from HD-EPIC_INTERMEDIATE/<P>/<rec>/device_calibration.json, nominal otherwise.
     location: the lab's held-out group (the kitchen)."""
     cal = os.path.join(raw_root, "HD-EPIC_INTERMEDIATE", P, rec, "device_calibration.json")
-    T = np.array(json.load(open(cal))["origin_transforms"]["T_device_cpf"]) if os.path.isfile(cal) \
-        else T_DEVICE_CPF_NOMINAL
+    T = T_DEVICE_CPF_NOMINAL.copy()
+    if os.path.isfile(cal):                                              # stored as [R | t] (3 x 4)
+        T[:3] = np.array(json.load(open(cal))["origin_transforms"]["T_device_cpf"], float)[:3, :4]
 
     def every_100ms(G):
         tg = G["tracking_timestamp_us"].to_numpy()
