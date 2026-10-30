@@ -4,8 +4,10 @@
 # table with AEA's rows (from the AEA run) and the new ones. Every stage whose output already exists is skipped (a fold
 # counts as trained once it has metrics_test.json), so a stopped run just starts again; delete an output to redo it.
 # ADT is left out until its SLAM points are downloaded (not in the lab's ADT download).
-#   nohup ./scripts/run_where.sh > ~/run_where.log 2>&1 &        then: tail -f ~/run_where.log
-# DATASETS (default "hdepic adt"), G0 / G1: the two GPUs, NW: data loader workers for the fine-tunes (config's if unset).
+#   ./scripts/run_where.sh 2>&1 | tee -a ~/run_where.log          (in tmux)
+# DATASETS (default "hdepic adt"), G0 / G1: the two GPUs (G0=G1: two folds at a time on one GPU), LANES=1: one fold at
+# a time (on G0), NW: data loader workers for the fine-tunes (config's if unset), EPOCHS: fine-tune epochs (config's 50
+# if unset; HD-EPIC's folds are ~5x AEA's, so EPOCHS=10 gives the same number of updates as AEA's 50).
 set -euo pipefail
 source ~/gb_env.sh
 cd ~/GazeBeyond
@@ -35,7 +37,7 @@ final() { case $1 in aea) s=location; v=causalfix;; adt) s=session; v=causalfix;
           p=probs_$1_lag_${s}_residual_pc_sph; echo ${p}_${v}_sphgeo.npz,${p}_seeds10_${v}_sphgeo.npz:mem+video; }
 lanes() {                                                     # lanes <function> <job> ...: two GPUs, jobs alternating
   local fn=$1 i=0 a=() b=(); shift
-  for j in "$@"; do if (( i++ % 2 )); then b+=("$j"); else a+=("$j"); fi; done
+  for j in "$@"; do if (( i++ % ${LANES:-2} )); then b+=("$j"); else a+=("$j"); fi; done
   ( for j in ${a[@]+"${a[@]}"}; do $fn $G0 $j; done ) & local p0=$!
   ( for j in ${b[@]+"${b[@]}"}; do $fn $G1 $j; done ) & local p1=$!
   wait $p0 && wait $p1 || { echo "a $fn job failed: see logs/"; exit 1; }
@@ -44,7 +46,8 @@ ftw() { local ds=${2%:*} f=${2#*:} out=runs/${2%:*}_labq/ft_vid_f${2#*:}   # the
   [ -f $out/metrics_test.json ] && { echo "   $ds fold $f: trained"; return; }
   echo "   $ds fold $f: training on GPU $1 ($(date +%H:%M))"
   CUDA_VISIBLE_DEVICES=$1 $PY scripts/train.py --config $CFG --set data.root=$(bench $ds) data.fold=$f \
-      data.video_features=true ${NW:+data.num_workers=$NW} train.init=$AEA0 train.progress=false train.out_dir=$out \
+      data.video_features=true ${NW:+data.num_workers=$NW} ${EPOCHS:+train.epochs=$EPOCHS} \
+      train.init=$AEA0 train.progress=false train.out_dir=$out \
       > logs/ft_vid_${ds}_f$f.log 2>&1
   echo "   $ds fold $f: done ($(date +%H:%M))"
 }
@@ -79,7 +82,7 @@ for ds in $DS; do
   fi
 done
 
-echo "== retrained: $(for ds in $DS; do echo -n "$ds $(folds $ds | wc -w) folds  "; done)(50 epochs each, ~3 h a fold)"
+echo "== retrained: $(for ds in $DS; do echo -n "$ds $(folds $ds | wc -w) folds  "; done)(${EPOCHS:-50} epochs each)"
 lanes ftw $(for ds in $DS; do for f in $(folds $ds); do echo $ds:$f; done; done)
 for ds in $DS; do
   [ -f $SS/probs_gbf_retrained_$ds.npz ] && { echo "   $ds retrained: done (results/gbf_where_retrained_$ds.txt)"; continue; }
