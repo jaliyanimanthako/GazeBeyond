@@ -72,7 +72,8 @@ if (( STEP <= 1 && LAST >= 1 )); then
     done
   done
   for ds in $DS; do
-    $PY scripts/attach_shift_video.py --bench $(bench $ds where) --suite $SS --tag ${ds}_lag
+    v=$SS/dense_${ds}_lag_vjepa.npy; [ -f $v ] || v=$SS/dense_${ds}_lag_vjepalab.npy   # the same V-JEPA cache, renamed
+    $PY scripts/attach_shift_video.py --bench $(bench $ds where) --suite $SS --tag ${ds}_lag --dense $v
   done
 fi
 

@@ -341,7 +341,8 @@ folds are the lab's. ADT needs its MPS SLAM points (not in the lab's download); 
 onto the SLAM frame per sequence. Video tokens use HD-EPIC's own camera mapping. `export_lab_probs.py --eval-folds`
 scores a model trained on another dataset (the AEA model, "as released") on every fold; `when --forecast` adds the
 lead-time AUC, `--ours <file>.npz:<key>` compares with the lab's final WHEN model, `--reuse` rescores saved scores.
-`scripts/run_lab_more.sh` runs all of it (ADT / HD-EPIC WHERE and WHEN, WHEN retrained on all three datasets).
+`scripts/run_lab_more.sh` runs all of it (ADT / HD-EPIC WHERE and WHEN, WHEN retrained on all three datasets);
+`scripts/run_where.sh` only the WHERE rows and table, skipping whatever is already done (ADT once its points are in).
 
 ### 3D scene features for the lab's WHERE model
 
