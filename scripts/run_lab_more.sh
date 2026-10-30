@@ -52,7 +52,7 @@ if (( STEP <= 1 && LAST >= 1 )); then
   echo "== 1. ADT, HD-EPIC: folds, questions, benchmarks"
   for ds in $DS; do
     for k in where when; do
-      (cd ~/SensorySpotlight && $PY tools/export_gbf_folds.py $ds $k --out ~/GazeBeyond/data/lab_q/${ds}_${k}_folds.json)
+      (cd ~/SensorySpotlight && $PY tools/export_gbf_folds.py $ds $k --forecast $FC --out ~/GazeBeyond/data/lab_q/${ds}_${k}_folds.json)
     done
     $PY scripts/lab_questions.py where --suite $SS --tag ${ds}_lag --labels $L/labels --out data/lab_q/${ds}_where.npz
     $PY scripts/lab_questions.py when --forecast $FC/$ds.npz --out data/lab_q/${ds}_when.npz
