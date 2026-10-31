@@ -230,6 +230,7 @@ if __name__ == "__main__":
     origin = np.median(head, 0)                               # small coordinates for float32 in the browser
     xyz = xyz - origin.astype(np.float32)
     rgb = height_colors(xyz @ up.astype(np.float32))
+    a.out = os.path.abspath(os.path.expanduser(a.out))
     os.makedirs(a.out, exist_ok=True)
     name = a.rec + ("_kitchen" if a.kitchen else "")
     write_ply(os.path.join(a.out, f"{name}.ply"), xyz, rgb)
