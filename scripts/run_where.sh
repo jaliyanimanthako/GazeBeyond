@@ -105,6 +105,6 @@ for ds in $DS; do
   for w in astrained:"as released" retrained:"retrained (+ V-JEPA)"; do row $ds "EgoSpanLift, ${w#*:}" probs_gbf_${w%%:*}_$ds.npz; done
   X+="$ds|Ours: final, 6 seeds|sph|$(final $ds | sed 's/:/|/');"
 done
-(cd ~/SensorySpotlight && WM_DATASETS=$W WM_EXTRA="${X%;}" WM_OUT=$HOME/GazeBeyond/results/where_metrics_gbf.md \
-    $PY tools/attention_where_metrics.py)
+(cd ~/SensorySpotlight && WM_LAB_SUITE=$L/senses_suite WM_DATASETS=$W WM_EXTRA="${X%;}" \
+    WM_OUT=$HOME/GazeBeyond/results/where_metrics_gbf.md $PY tools/attention_where_metrics.py)   # the lab's rows, Ryan's in $L
 echo "WHERE DONE: ~/GazeBeyond/results/where_metrics_gbf.md"

@@ -137,8 +137,8 @@ if (( STEP <= 5 && LAST >= 5 )); then
     done
     X+="$ds|Ours: final, 6 seeds|sph|$(final $ds | sed 's/:/|/');"
   done
-  (cd ~/SensorySpotlight && WM_DATASETS=${DS// /,} WM_EXTRA="${X%;}" WM_OUT=$HOME/GazeBeyond/results/where_metrics_gbf_more.md \
-      $PY tools/attention_where_metrics.py)
+  (cd ~/SensorySpotlight && WM_LAB_SUITE=$L/senses_suite WM_DATASETS=${DS// /,} WM_EXTRA="${X%;}" \
+      WM_OUT=$HOME/GazeBeyond/results/where_metrics_gbf_more.md $PY tools/attention_where_metrics.py)
   echo "WHERE table: ~/GazeBeyond/results/where_metrics_gbf_more.md"
 fi
 echo "LAB MORE DONE"
