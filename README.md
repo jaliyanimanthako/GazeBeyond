@@ -345,6 +345,8 @@ lead-time AUC, `--ours <file>.npz:<key>` compares with the lab's final WHEN mode
 `scripts/run_where.sh` only the WHERE rows and table, skipping whatever is already done (ADT once its points are in).
 `scripts/render_scene.py` renders one recording's SLAM points as a 3D scene (an HTML viewer with the head trajectory and
 gaze ray over time, and a .ply); `hdepic --kitchen` merges every session of the kitchen.
+`scripts/render_adt_scene.py` draws an ADT sequence from its ground truth alone (object boxes, head path, 3D fixations,
+the next shift's landing) for figures, with a "Save PNG" at 3x resolution.
 
 ### 3D scene features for the lab's WHERE model
 
