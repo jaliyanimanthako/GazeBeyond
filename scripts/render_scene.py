@@ -18,7 +18,6 @@ import base64
 import json
 import os
 import sys
-import zipfile
 
 import numpy as np
 
@@ -43,7 +42,8 @@ def sources(a):
         return (os.path.join(a.gaze_root, a.rec, "mps", "eye_gaze", "general_eye_gaze.csv"),
                 (f("mps_slam_trajectories.zip"), "closed_loop_trajectory.csv"),
                 [(f("mps_slam_points.zip"), "semidense_points.csv.gz")], T, None)
-    hits = [(P, z, i) for r, P, z, i in list_hdepic(a.slam_root) if r == a.rec]
+    recs = list_hdepic(a.slam_root)
+    hits = [(P, z, i) for r, P, z, i in recs if r == a.rec]
     if not hits:
         raise SystemExit(f"{a.rec} not in {a.slam_root} (--list shows the recordings)")
     P, z, i = hits[0]
@@ -51,9 +51,9 @@ def sources(a):
     cal = os.path.join(a.src, "HD-EPIC_INTERMEDIATE", P, a.rec, "device_calibration.json")
     if os.path.isfile(cal):
         T[:3] = np.array(json.load(open(cal))["origin_transforms"]["T_device_cpf"], float)[:3, :4]
-    with zipfile.ZipFile(z) as zf:
-        sessions = sorted(n for n in zf.namelist() if n.endswith("/slam/semidense_points.csv.gz"))
-    pts = [(z, n) for n in sessions] if a.kitchen else [(z, f"{i}/slam/semidense_points.csv.gz")]
+    # one zip per session (SLAM/multi/<i>.zip), all sessions of a kitchen in the same world frame
+    pts = [(zk, f"{ik}/slam/semidense_points.csv.gz") for _, Pk, zk, ik in recs if Pk == P] if a.kitchen \
+        else [(z, f"{i}/slam/semidense_points.csv.gz")]
     return ((os.path.join(a.src, "HD-EPIC_GAZE", P, "GAZE_HAND.zip"), f"GAZE_HAND/mps_{a.rec}_vrs.zip",
              f"mps_{a.rec}_vrs/eye_gaze/general_eye_gaze.csv"),
             (z, f"{i}/slam/closed_loop_trajectory.csv"), pts, T, None)
