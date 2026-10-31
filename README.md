@@ -343,6 +343,8 @@ scores a model trained on another dataset (the AEA model, "as released") on ever
 lead-time AUC, `--ours <file>.npz:<key>` compares with the lab's final WHEN model, `--reuse` rescores saved scores.
 `scripts/run_lab_more.sh` runs all of it (ADT / HD-EPIC WHERE and WHEN, WHEN retrained on all three datasets);
 `scripts/run_where.sh` only the WHERE rows and table, skipping whatever is already done (ADT once its points are in).
+`scripts/render_scene.py` renders one recording's SLAM points as a 3D scene (an HTML viewer with the head trajectory and
+gaze ray over time, and a .ply); `hdepic --kitchen` merges every session of the kitchen.
 
 ### 3D scene features for the lab's WHERE model
 
