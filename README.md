@@ -346,7 +346,8 @@ lead-time AUC, `--ours <file>.npz:<key>` compares with the lab's final WHEN mode
 `scripts/render_scene.py` renders one recording's SLAM points as a 3D scene (an HTML viewer with the head trajectory and
 gaze ray over time, and a .ply); `hdepic --kitchen` merges every session of the kitchen.
 `scripts/render_adt_scene.py` draws an ADT sequence from its ground truth alone (object boxes, head path, 3D fixations,
-the next shift's landing) for figures, with a "Save PNG" at 3x resolution.
+the next shift's landing) for figures, with a "Save PNG" at 3x resolution; `scripts/render_hdepic_scene.py` the same for
+HD-EPIC, on the kitchen's point cloud with the annotated moved objects (fixation depth from the points).
 
 ### 3D scene features for the lab's WHERE model
 

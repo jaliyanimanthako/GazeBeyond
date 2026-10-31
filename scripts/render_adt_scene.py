@@ -14,6 +14,7 @@ the head's forward axis 0.3 s before the shift. --list ranks shifts that land ou
 the moment the viewer opens at (default: the top one). Dynamic objects are drawn where they are at that moment.
 """
 import argparse
+import base64
 import glob
 import io
 import json
@@ -78,7 +79,7 @@ def read_objects(gt, t_ns):
 def fixations(t, wdir, p, valid, max_speed=75.0, min_dur=0.1):
     """[(t_start, t_end, mean world gaze direction, median 3D point or None)] from the world gaze speed."""
     dt = np.diff(t)
-    slow = (angle(wdir[1:], wdir[:-1]) / np.maximum(dt, 1e-3) < max_speed) & valid[1:] & valid[:-1] & (dt < 0.1)
+    slow = (angle(wdir[1:], wdir[:-1]) / np.maximum(dt, 1e-3) < max_speed) & valid[1:] & valid[:-1] & (dt < 0.15)
     cuts = np.r_[0, np.flatnonzero(~slow) + 1, len(t)]
     F = []
     for a, b in zip(cuts[:-1], cuts[1:]):
@@ -131,7 +132,7 @@ HTML = """<!doctype html>
   button { background:#22262b; color:#fff; border:0; border-radius:5px; padding:5px 10px; cursor:pointer; }
   select { font:inherit; }
 </style></head><body>
-<div id="info">__TITLE__ &middot; __NOBJ__ objects &middot; drag to orbit, scroll to zoom, right-drag to pan</div>
+<div id="info">__TITLE__ &middot; __NOBJ__ &middot; drag to orbit, scroll to zoom, right-drag to pan</div>
 <div id="hover"></div>
 <div id="ui">
   <button id="play">Play</button>
@@ -141,6 +142,7 @@ HTML = """<!doctype html>
   <label>history (s) <input id="hist" type="range" min="0" max="60" step="1" value="20"></label>
   <label><input id="labels" type="checkbox"> object names</label>
   <label><input id="path" type="checkbox" checked> head path</label>
+  <label id="cloudui">point size <input id="psize" type="range" min="0" max="5" step="0.5" value="1.5"></label>
   <label><input id="transp" type="checkbox"> transparent PNG</label>
   <button id="save">Save PNG</button>
 </div>
@@ -170,9 +172,28 @@ const controls = new OrbitControls(camera, renderer.domElement);
 const g = new THREE.GridHelper(D.floorSize, Math.round(D.floorSize * 2), 0xc9c3b8, 0xdedad2);
 g.position.set(D.floorCentre[0], D.floor, D.floorCentre[1]); scene.add(g);
 
-// objects: translucent boxes with edges, coloured by category
+// scene points (HD-EPIC: the kitchen's SLAM point cloud)
+let cloud = null;
+if (D.pts) {
+  const dec = (s, T) => { const b = Uint8Array.from(atob(s), c => c.charCodeAt(0)); return new T(b.buffer); };
+  const pg = new THREE.BufferGeometry();
+  pg.setAttribute("position", new THREE.BufferAttribute(dec(D.pts, Float32Array), 3));
+  pg.setAttribute("color", new THREE.BufferAttribute(dec(D.rgb, Uint8Array), 3, true));
+  cloud = new THREE.Points(pg, new THREE.PointsMaterial({ size: 1.5, sizeAttenuation: false, vertexColors: true }));
+  scene.add(cloud);
+} else { $("cloudui").style.display = "none"; }
+
+// objects: translucent boxes with edges, coloured by category; or, with positions only, labelled dots
 const boxes = [], labels = [];
 D.objects.forEach((o, i) => {
+  if (D.markers) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(0.035, 16, 12), new THREE.MeshLambertMaterial({ color: 0x3b4148 }));
+    m.position.set(...o.c); m.userData = { i }; scene.add(m); boxes.push(m);
+    const div = document.createElement("div"); div.textContent = o.name;
+    Object.assign(div.style, { font: "11px system-ui", color: "#22262b", background: "#ffffffcc", padding: "1px 4px", borderRadius: "3px", transform: "translateY(-14px)" });
+    const l = new CSS2DObject(div); l.position.set(...o.c); l.visible = false; scene.add(l); labels.push(l);
+    return;
+  }
   const geo = new THREE.BoxGeometry(...o.size);
   const m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: o.color, transparent: true, opacity: 0.35, depthWrite: false }));
   const e = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: o.color, transparent: true, opacity: 0.9 }));
@@ -237,7 +258,8 @@ function setFrame(k) {
   fg.setDrawRange(i0, Math.max(i1 - i0, 0)); fg.attributes.color.needsUpdate = true;
   // the next shift within 2 s: an arc from the current gaze to its landing
   const s = D.shifts.find(s => s.t >= t && s.t - t <= 2);
-  if (hl) { hl.material.opacity = 0.35; hl.userData.edge.material.color.set(D.objects[hl.userData.i].color); hl = null; }
+  if (hl) { if (D.markers) { hl.material.color.set(0x3b4148); hl.scale.setScalar(1); labels[hl.userData.i].visible = $("labels").checked; }
+            else { hl.material.opacity = 0.35; hl.userData.edge.material.color.set(D.objects[hl.userData.i].color); } hl = null; }
   [shiftArc, landDot, ring].forEach(x => x.visible = !!s);
   if (s) {
     const L = new THREE.Vector3(...s.p), mid = gp.clone().add(L).multiplyScalar(0.5);
@@ -245,7 +267,9 @@ function setFrame(k) {
     const curve = new THREE.QuadraticBezierCurve3(gp, mid, L);
     setLine(shiftArc, curve.getPoints(39).map(v => v.toArray()));
     landDot.position.copy(L); ring.position.copy(L); ring.lookAt(h);
-    if (s.obj != null) { hl = boxes[s.obj]; hl.material.opacity = 0.7; hl.userData.edge.material.color.set(TEAL); }
+    if (s.obj != null) { hl = boxes[s.obj];
+      if (D.markers) { hl.material.color.set(TEAL); hl.scale.setScalar(1.6); labels[s.obj].visible = true; }
+      else { hl.material.opacity = 0.7; hl.userData.edge.material.color.set(TEAL); } }
   }
 }
 $("time").oninput = e => setFrame(+e.target.value);
@@ -253,6 +277,7 @@ $("hist").oninput = () => setFrame(+$("time").value);
 $("shift").onchange = e => { const s = D.shifts[+e.target.value]; setFrame(D.t.findIndex(x => x >= s.t - 0.3)); };
 $("labels").onchange = e => labels.forEach(l => l.visible = e.target.checked);
 $("path").onchange = e => { path.visible = e.target.checked; };
+$("psize").oninput = e => { if (cloud) { cloud.material.size = +e.target.value; cloud.visible = +e.target.value > 0; } };
 let playing = false, last = 0;
 $("play").onclick = () => { playing = !playing; $("play").textContent = playing ? "Pause" : "Play"; last = performance.now(); };
 $("save").onclick = () => {
@@ -282,6 +307,80 @@ renderer.setAnimationLoop(now => {
 });
 </script></body></html>
 """
+
+
+def find_shifts(t, eye, fwd, wdir, p, ok, fov_half):
+    """fixations and the shifts between them (>= 30 deg, landing with a 3D point); out of view: the landing more than
+    fov_half from the head's forward axis at the WHERE query, 0.3 s before the eye leaves."""
+    F = fixations(t, wdir, p, ok)
+    shifts = []
+    for (a0, a1, da, _), (b0, b1, db, pb) in zip(F[:-1], F[1:]):
+        size = float(angle(da, db))
+        if size < 30 or b0 - a1 > 0.5 or pb is None:
+            continue
+        q = min(np.searchsorted(t, a1 - 0.3), len(t) - 1)
+        out = bool(angle(fwd[q], pb - eye[q]) > fov_half)
+        shifts.append(dict(t=float(a1), size=size, out=out, p=pb, dur=float(b1 - b0)))
+    print(f"{len(F)} fixations, {len(shifts)} shifts >= 30 deg ({sum(s['out'] for s in shifts)} landing out of view)")
+    return F, shifts
+
+
+def rank_shifts(shifts, objects, show=15):
+    """teaser moments first: out of view, on a named object, a clear (long) landing fixation, a big shift."""
+    for s in shifts:
+        s["obj"] = landed_object(s["p"], objects)
+    rank = sorted(shifts, key=lambda s: -(2 * s["out"] + (s["obj"] is not None) + min(s["dur"], 1) + s["size"] / 90))
+    if show:
+        print(f"\n{'t (s)':>7} {'size':>6} {'out':>4} {'landing fix':>11}  landed on")
+        for s in rank[:show]:
+            print(f"{s['t']:7.1f} {s['size']:5.0f}° {'yes' if s['out'] else '':>4} {s['dur']:10.2f}s  "
+                  f"{objects[s['obj']][0] if s['obj'] is not None else '-'}")
+    return rank
+
+
+def write_page(path, title, t, eye, fwd, wdir, p, ok, F, shifts, objects, t_open, fov_half, up=None, points=None,
+               marker_objects=False, step=3):
+    """the viewer: world frame -> three.js (y up, metres, origin at the median head position). up: the world's up
+    direction (None: the axis the head moves least along); points: optional (xyz (n, 3), rgb (n, 3) uint8) scene
+    points; marker_objects: draw the objects as labelled dots (positions only) instead of boxes; step: viewer frames
+    every step-th gaze sample."""
+    if up is None:
+        up = np.linalg.eigh(np.cov((eye[ok] - eye[ok].mean(0)).T))[1][:, 0]
+        ref = points[0] if points is not None else np.array([o[4] for o in objects])
+        if (np.median(eye[ok], 0) - np.median(ref, 0)) @ up < 0:
+            up = -up
+    A = align_up(up)
+    o0 = np.median(eye[ok], 0)
+    W = lambda x: ((np.asarray(x) - o0) @ A.T).round(4)                 # noqa: E731
+    k = np.flatnonzero(ok)[::step]
+    if points is not None:
+        cy = (points[0] - o0) @ A.T
+    else:
+        cy = W(np.array([c + R @ (s / 2 * np.array(sg)) for _, _, _, R, c, s in objects
+                         for sg in np.array(np.meshgrid([-1, 1], [-1, 1], [-1, 1])).T.reshape(-1, 3)]))
+    floor = float(np.percentile(cy[:, 1], 1))
+    lo, hi = np.percentile(cy[:, [0, 2]], 1, 0), np.percentile(cy[:, [0, 2]], 99, 0)
+    cats = sorted({o[1] for o in objects})
+    data = dict(
+        t=t[k].round(3).tolist(), head=W(eye[k]).tolist(), fwd=(fwd[k] @ A.T).round(4).tolist(),
+        gaze=(wdir[k] @ A.T).round(4).tolist(),
+        gp=[W(x).tolist() if np.isfinite(x).all() else None for x in p[k]],
+        fix=[dict(t0=round(f0, 3), t1=round(f1, 3), p=W(fp).tolist() if fp is not None else None) for f0, f1, _, fp in F],
+        shifts=[dict(t=s["t"], size=s["size"], out=s["out"], p=W(s["p"]).tolist(), obj=s["obj"]) for s in shifts],
+        objects=[dict(name=n, cat=c, R=(A @ R).round(5).flatten().tolist(), c=W(cc).tolist(), size=sz.round(4).tolist(),
+                      color=PALETTE[cats.index(c) % len(PALETTE)]) for n, c, _, R, cc, sz in objects],
+        markers=marker_objects, floor=floor, floorCentre=((lo + hi) / 2).round(3).tolist(),
+        floorSize=float(np.ceil((hi - lo).max() + 2)), fovHalf=fov_half, pts=None, rgb=None)
+    if points is not None:
+        data["pts"] = base64.b64encode(cy.astype(np.float32).tobytes()).decode()
+        data["rgb"] = base64.b64encode(np.ascontiguousarray(points[1], np.uint8).tobytes()).decode()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    k0 = int(np.argmin(np.abs(t[k] - t_open)))
+    n = f"{len(objects)} objects" + (f" &middot; {len(cy):,} points" if points is not None else "")
+    open(path, "w").write(HTML.replace("__TITLE__", title).replace("__NOBJ__", n)
+                          .replace("__NFRAMES_1__", str(len(k) - 1)).replace("__K0__", str(k0))
+                          .replace("__DATA__", json.dumps(data, separators=(",", ":"))))
+    print(f"\n{path} ({os.path.getsize(path) / 1e6:.1f} MB, {len(objects)} objects, opens at {t_open:.1f} s)")
 
 
 if __name__ == "__main__":
@@ -316,70 +415,17 @@ if __name__ == "__main__":
     eye, wdir, fwd = T_wc[:, :3, 3], np.einsum("nij,nj->ni", T_wc[:, :3, :3], g_cpf), T_wc[:, :3, 2]
     ok &= np.isfinite(wdir).all(1)
     p = np.where((ok & (depth > 0))[:, None], eye + depth[:, None] * wdir, np.nan)
+    F, shifts = find_shifts(t, eye, fwd, wdir, p, ok, a.fov_half)
 
-    F = fixations(t, wdir, p, ok)
-    shifts = []
-    for (a0, a1, da, _), (b0, b1, db, pb) in zip(F[:-1], F[1:]):
-        size = float(angle(da, db))
-        if size < 30 or b0 - a1 > 0.5 or pb is None:
-            continue
-        q = min(np.searchsorted(t, a1 - 0.3), len(t) - 1)       # the WHERE query, 0.3 s before the eye leaves
-        out = bool(angle(fwd[q], pb - eye[q]) > a.fov_half)
-        shifts.append(dict(t=float(a1), size=size, out=out, p=pb, dur=float(b1 - b0)))
-    print(f"{len(F)} fixations, {len(shifts)} shifts >= 30 deg ({sum(s['out'] for s in shifts)} landing out of view)")
-
+    t_ns = lambda s: int(tus[0] * 1000 + s * 1e9)                       # noqa: E731
+    objects = read_objects(gt, t_ns(a.t if a.t is not None else t[-1] / 2))
+    rank = rank_shifts(shifts, objects)
+    if a.list:
+        sys.exit()
     t_open = a.t
-    objects = read_objects(gt, int(tus[0] * 1000 + (t_open if t_open is not None else t[-1] / 2) * 1e9))
-    for s in shifts:
-        s["obj"] = landed_object(s["p"], objects)
-    # teaser moments: out of view, on a named object, a clear (long) landing fixation, a big shift
-    rank = sorted(shifts, key=lambda s: -(2 * s["out"] + (s["obj"] is not None) + min(s["dur"], 1) + s["size"] / 90))
-    if a.list or t_open is None:
-        print(f"\n{'t (s)':>7} {'size':>6} {'out':>4} {'landing fix':>11}  landed on")
-        for s in rank[:15]:
-            print(f"{s['t']:7.1f} {s['size']:5.0f}° {'yes' if s['out'] else '':>4} {s['dur']:10.2f}s  "
-                  f"{objects[s['obj']][0] if s['obj'] is not None else '-'}")
-        if a.list:
-            sys.exit()
     if t_open is None:
         t_open = rank[0]["t"] - 0.3 if rank else t[-1] / 2
-        objects = read_objects(gt, int(tus[0] * 1000 + t_open * 1e9))    # dynamic objects at that moment
-        for s in shifts:
-            s["obj"] = landed_object(s["p"], objects)
-
-    # world frame -> three.js (y up, metres, origin at the median head position)
-    up = -gravity if gravity is not None else None
-    if up is None:                                             # the axis the head moves least along, pointing at it
-        c = np.cov((eye[ok] - eye[ok].mean(0)).T)
-        up = np.linalg.eigh(c)[1][:, 0]
-        if (np.median(eye[ok], 0) - np.median([o[4] for o in objects], 0)) @ up < 0:
-            up = -up
-    A = align_up(up)
-    o0 = np.median(eye[ok], 0)
-    W = lambda x: ((np.asarray(x) - o0) @ A.T).round(4)                 # noqa: E731
-    step = 3                                                   # 30 -> 10 Hz for the viewer
-    k = np.flatnonzero(ok)[::step]
-    corners = np.array([c + R @ (s / 2 * np.array(sg)) for _, _, _, R, c, s in objects
-                        for sg in np.array(np.meshgrid([-1, 1], [-1, 1], [-1, 1])).T.reshape(-1, 3)])
-    cy = W(corners)
-    floor = float(np.percentile(cy[:, 1], 1))
-    lo, hi = cy[:, [0, 2]].min(0), cy[:, [0, 2]].max(0)
-    cats = sorted({o[1] for o in objects})
-    data = dict(
-        t=t[k].round(3).tolist(), head=W(eye[k]).tolist(), fwd=(fwd[k] @ A.T).round(4).tolist(),
-        gaze=(wdir[k] @ A.T).round(4).tolist(),
-        gp=[W(x).tolist() if np.isfinite(x).all() else None for x in p[k]],
-        fix=[dict(t0=round(f0, 3), t1=round(f1, 3), p=W(fp).tolist() if fp is not None else None) for f0, f1, _, fp in F],
-        shifts=[dict(t=s["t"], size=s["size"], out=s["out"], p=W(s["p"]).tolist(), obj=s["obj"]) for s in shifts],
-        objects=[dict(name=n, cat=c, R=(A @ R).round(5).flatten().tolist(), c=W(cc).tolist(), size=sz.round(4).tolist(),
-                      color=PALETTE[cats.index(c) % len(PALETTE)]) for n, c, _, R, cc, sz in objects],
-        floor=floor, floorCentre=((lo + hi) / 2).round(3).tolist(), floorSize=float(np.ceil((hi - lo).max() + 2)),
-        fovHalf=a.fov_half)
-    out = os.path.abspath(os.path.expanduser(a.out))
-    os.makedirs(out, exist_ok=True)
-    path = os.path.join(out, f"{a.seq}.html")
-    k0 = int(np.argmin(np.abs(t[k] - t_open)))
-    open(path, "w").write(HTML.replace("__TITLE__", a.seq).replace("__NOBJ__", str(len(objects)))
-                          .replace("__NFRAMES_1__", str(len(k) - 1)).replace("__K0__", str(k0))
-                          .replace("__DATA__", json.dumps(data, separators=(",", ":"))))
-    print(f"\n{path} ({os.path.getsize(path) / 1e6:.1f} MB, {len(objects)} objects, opens at {t_open:.1f} s)")
+        objects = read_objects(gt, t_ns(t_open))                        # dynamic objects at that moment
+        rank_shifts(shifts, objects, show=0)
+    write_page(os.path.join(os.path.abspath(os.path.expanduser(a.out)), f"{a.seq}.html"), a.seq, t, eye, fwd, wdir, p,
+               ok, F, shifts, objects, t_open, a.fov_half, up=-gravity if gravity is not None else None)
