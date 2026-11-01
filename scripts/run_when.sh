@@ -54,6 +54,9 @@ ftn() { local ds=${2%:*} f=${2#*:} init=$AEA0 out=runs/${2%:*}_labq_when/ft_f${2
 
 for ds in $DS; do
   echo "== $ds: the lab's forecast files, folds, questions, benchmark"
+  for f in $ds.npz when_v4_$ds.npz; do                       # both or neither: never half of a lab rebuild
+    [ -f $FCL/$f ] || [ -f $FC/$f ] || { echo "no $FC/$f (nor a copy in $FCL): put the lab's file there first"; exit 1; }
+  done
   for f in $ds.npz when_v4_$ds.npz; do
     [ -f $FCL/$f ] || { cp $FC/$f $FCL/$f; echo "   copied $FC/$f ($(date -r $FC/$f +%F' '%T))"; }
   done
