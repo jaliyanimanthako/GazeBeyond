@@ -342,7 +342,9 @@ onto the SLAM frame per sequence. Video tokens use HD-EPIC's own camera mapping.
 scores a model trained on another dataset (the AEA model, "as released") on every fold; `when --forecast` adds the
 lead-time AUC, `--ours <file>.npz:<key>` compares with the lab's final WHEN model, `--reuse` rescores saved scores.
 `scripts/run_lab_more.sh` runs all of it (ADT / HD-EPIC WHERE and WHEN, WHEN retrained on all three datasets);
-`scripts/run_where.sh` only the WHERE rows and table, skipping whatever is already done (ADT once its points are in).
+`scripts/run_where.sh` only the WHERE rows and table, skipping whatever is already done (ADT once its points are in);
+`scripts/run_when.sh` the same for WHEN (as released and retrained on all three datasets, the same number of updates
+per fine-tune), reading copies of the lab's forecast files so a rebuild on their side cannot mix question sets.
 `scripts/render_scene.py` renders one recording's SLAM points as a 3D scene (an HTML viewer with the head trajectory and
 gaze ray over time, and a .ply); `hdepic --kitchen` merges every session of the kitchen.
 `scripts/render_adt_scene.py` draws an ADT sequence from its ground truth alone (object boxes, head path, 3D fixations,
