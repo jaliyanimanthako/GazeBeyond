@@ -66,7 +66,7 @@ for ds in $DS; do
   fi
   q=data/lab_q/${ds}_when
   [ -f ${q}_folds.json ] || (cd ~/SensorySpotlight && $PY tools/export_gbf_folds.py $ds when --forecast $FCL \
-                                 --out ${q}_folds.json)
+                                 --out $HOME/GazeBeyond/${q}_folds.json)   # absolute: this runs in ~/SensorySpotlight
   [ -f $q.npz ] || $PY scripts/lab_questions.py when --forecast $FCL/$ds.npz --out $q.npz
   if [ ! -f $(bench $ds)/all.npz ]; then
     # HD-EPIC recordings are long (up to ~50 min of SLAM observations each): few at a time
