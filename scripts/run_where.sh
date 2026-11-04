@@ -33,8 +33,10 @@ for ds in ${DATASETS:-hdepic adt}; do
   fi
 done
 
-bench() { echo data/$1_labq_where; }
-folds() { $PY -c "import json,sys; print(*sorted(set(json.load(open(sys.argv[1])).values())))" data/lab_q/$1_where_folds.json; }
+bench() { [ $1 = aea ] && echo data/fovs_aria_labq_where || echo data/$1_labq_where; }
+rdir() { [ $1 = aea ] && echo runs/fovs_aria_labq || echo runs/$1_labq; }   # AEA's from the earlier AEA run
+folds() { [ $1 = aea ] && echo 1 2 3 4 5 ||
+          $PY -c "import json,sys; print(*sorted(set(json.load(open(sys.argv[1])).values())))" data/lab_q/$1_where_folds.json; }
 final() { case $1 in aea) s=location; v=causalfix;; adt) s=session; v=causalfix;; hdepic) s=location; v=cachefix;; esac
           p=probs_$1_lag_${s}_residual_pc_sph; echo ${p}_${v}_sphgeo.npz,${p}_seeds10_${v}_sphgeo.npz:mem+video; }
 lanes() {                                                     # lanes <function> <job> ...: two GPUs, jobs alternating
@@ -47,18 +49,23 @@ lanes() {                                                     # lanes <function>
 VID=${VIDEO:-1}
 FT=$([ $VID = 1 ] && echo ft_vid || echo ft)                # run folder prefix: ft_vid_f<f> (+ V-JEPA) / ft_f<f> (none)
 RT=$([ $VID = 1 ] && echo gbf_retrained || echo gbf_retrained_novid)
-ftw() { local ds=${2%:*} f=${2#*:} out=runs/${2%:*}_labq/${FT}_f${2#*:}   # the AEA model fine-tuned on one fold (+ V-JEPA)
+ftw() { local ds=${2%:*} f=${2#*:} init=$AEA0; local out=$(rdir $ds)/${FT}_f$f   # the AEA model fine-tuned on one fold (+ V-JEPA)
   [ -f $out/metrics_test.json ] && { echo "   $ds fold $f: trained"; return; }
-  echo "   $ds fold $f: training on GPU $1 ($(date +%H:%M))"
+  [ $ds = aea ] && [ $f != 4 ] && init=runs/fovs_aria_lab/cv/egospanlift_f$f   # AEA: the same fold's model (AEA0 = fold 4)
+  echo "   $ds fold $f: training on GPU $1 from $init ($(date +%H:%M))"
   CUDA_VISIBLE_DEVICES=$1 $PY scripts/train.py --config $CFG --set data.root=$(bench $ds) data.fold=$f \
       data.video_features=$([ $VID = 1 ] && echo true || echo false) ${NW:+data.num_workers=$NW} \
-      ${EPOCHS:+train.epochs=$EPOCHS} train.init=$AEA0 train.progress=false train.out_dir=$out \
+      ${EPOCHS:+train.epochs=$EPOCHS} train.init=$init train.progress=false train.out_dir=$out \
       > logs/${FT}_${ds}_f$f.log 2>&1
   echo "   $ds fold $f: done ($(date +%H:%M))"
 }
 
 for ds in $DS; do
   echo "== $ds: folds, questions, benchmark, camera tokens"
+  if [ $ds = aea ]; then                                      # built and released by the earlier AEA run
+    [ -f $(bench aea)/all.npz ] || { echo "no $(bench aea): build it first"; exit 1; }
+    continue
+  fi
   q=data/lab_q/${ds}_where
   [ -f ${q}_folds.json ] || (cd ~/SensorySpotlight && $PY tools/export_gbf_folds.py $ds where --forecast $FC \
                                  --out ~/GazeBeyond/${q}_folds.json)
@@ -92,7 +99,7 @@ lanes ftw $(for ds in $DS; do for f in $(folds $ds); do echo $ds:$f; done; done)
 for ds in $DS; do
   [ -f $SS/probs_${RT}_$ds.npz ] && { echo "   $ds retrained: done (results/${RT/gbf_/gbf_where_}_$ds.txt)"; continue; }
   CUDA_VISIBLE_DEVICES=$G0 $PY scripts/export_lab_probs.py where --bench $(bench $ds) --suite $SS --tag ${ds}_lag \
-      --name ${RT}_$ds --runs $(for f in $(folds $ds); do echo runs/${ds}_labq/${FT}_f$f; done) \
+      --name ${RT}_$ds --runs $(for f in $(folds $ds); do echo $(rdir $ds)/${FT}_f$f; done) \
       --compare $(final $ds) | tee results/${RT/gbf_/gbf_where_}_$ds.txt
 done
 [ $VID = 1 ] || { echo "WHERE (no video) DONE: $SS/probs_${RT}_<ds>.npz"; exit 0; }
