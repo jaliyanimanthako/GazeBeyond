@@ -8,6 +8,8 @@
 # DATASETS (default "hdepic adt"), G0 / G1: the two GPUs (G0=G1: two folds at a time on one GPU), LANES=1: one fold at
 # a time (on G0), NW: data loader workers for the fine-tunes (config's if unset), EPOCHS: fine-tune epochs (config's 50
 # if unset; HD-EPIC's folds are ~5x AEA's, so EPOCHS=10 gives the same number of updates as AEA's 50).
+# VIDEO=0: retrained without the camera tokens (EgoSpanLift's original inputs), as runs/<ds>_labq/ft_f<f> and
+# <suite>/probs_gbf_retrained_novid_<ds>.npz; stops after the export (the table and the video runs are left alone).
 set -euo pipefail
 source ~/gb_env.sh
 cd ~/GazeBeyond
@@ -42,13 +44,16 @@ lanes() {                                                     # lanes <function>
   ( for j in ${b[@]+"${b[@]}"}; do $fn $G1 $j; done ) & local p1=$!
   wait $p0 && wait $p1 || { echo "a $fn job failed: see logs/"; exit 1; }
 }
-ftw() { local ds=${2%:*} f=${2#*:} out=runs/${2%:*}_labq/ft_vid_f${2#*:}   # the AEA model fine-tuned on one fold + V-JEPA
+VID=${VIDEO:-1}
+FT=$([ $VID = 1 ] && echo ft_vid || echo ft)                # run folder prefix: ft_vid_f<f> (+ V-JEPA) / ft_f<f> (none)
+RT=$([ $VID = 1 ] && echo gbf_retrained || echo gbf_retrained_novid)
+ftw() { local ds=${2%:*} f=${2#*:} out=runs/${2%:*}_labq/${FT}_f${2#*:}   # the AEA model fine-tuned on one fold (+ V-JEPA)
   [ -f $out/metrics_test.json ] && { echo "   $ds fold $f: trained"; return; }
   echo "   $ds fold $f: training on GPU $1 ($(date +%H:%M))"
   CUDA_VISIBLE_DEVICES=$1 $PY scripts/train.py --config $CFG --set data.root=$(bench $ds) data.fold=$f \
-      data.video_features=true ${NW:+data.num_workers=$NW} ${EPOCHS:+train.epochs=$EPOCHS} \
-      train.init=$AEA0 train.progress=false train.out_dir=$out \
-      > logs/ft_vid_${ds}_f$f.log 2>&1
+      data.video_features=$([ $VID = 1 ] && echo true || echo false) ${NW:+data.num_workers=$NW} \
+      ${EPOCHS:+train.epochs=$EPOCHS} train.init=$AEA0 train.progress=false train.out_dir=$out \
+      > logs/${FT}_${ds}_f$f.log 2>&1
   echo "   $ds fold $f: done ($(date +%H:%M))"
 }
 
@@ -82,14 +87,15 @@ for ds in $DS; do
   fi
 done
 
-echo "== retrained: $(for ds in $DS; do echo -n "$ds $(folds $ds | wc -w) folds  "; done)(${EPOCHS:-50} epochs each)"
+echo "== retrained$([ $VID = 1 ] || echo ', no video'): $(for ds in $DS; do echo -n "$ds $(folds $ds | wc -w) folds  "; done)(${EPOCHS:-50} epochs each)"
 lanes ftw $(for ds in $DS; do for f in $(folds $ds); do echo $ds:$f; done; done)
 for ds in $DS; do
-  [ -f $SS/probs_gbf_retrained_$ds.npz ] && { echo "   $ds retrained: done (results/gbf_where_retrained_$ds.txt)"; continue; }
+  [ -f $SS/probs_${RT}_$ds.npz ] && { echo "   $ds retrained: done (results/${RT/gbf_/gbf_where_}_$ds.txt)"; continue; }
   CUDA_VISIBLE_DEVICES=$G0 $PY scripts/export_lab_probs.py where --bench $(bench $ds) --suite $SS --tag ${ds}_lag \
-      --name gbf_retrained_$ds --runs $(for f in $(folds $ds); do echo runs/${ds}_labq/ft_vid_f$f; done) \
-      --compare $(final $ds) | tee results/gbf_where_retrained_$ds.txt
+      --name ${RT}_$ds --runs $(for f in $(folds $ds); do echo runs/${ds}_labq/${FT}_f$f; done) \
+      --compare $(final $ds) | tee results/${RT/gbf_/gbf_where_}_$ds.txt
 done
+[ $VID = 1 ] || { echo "WHERE (no video) DONE: $SS/probs_${RT}_<ds>.npz"; exit 0; }
 
 echo "== the lab's WHERE table"
 row() { local ds=$1 n=$2 f=$3
