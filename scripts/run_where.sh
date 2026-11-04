@@ -10,6 +10,8 @@
 # if unset; HD-EPIC's folds are ~5x AEA's, so EPOCHS=10 gives the same number of updates as AEA's 50).
 # VIDEO=0: retrained without the camera tokens (EgoSpanLift's original inputs), as runs/<ds>_labq/ft_f<f> and
 # <suite>/probs_gbf_retrained_novid_<ds>.npz; stops after the export (the table and the video runs are left alone).
+# FINAL: the run the exports are compared with, <probs file(s)>:<variant> (default: our final run in the suite; an
+# absolute path is fine, e.g. the lab's file after a rebuild of the questions).
 set -euo pipefail
 source ~/gb_env.sh
 cd ~/GazeBeyond
@@ -37,7 +39,8 @@ bench() { [ $1 = aea ] && echo data/fovs_aria_labq_where || echo data/$1_labq_wh
 rdir() { [ $1 = aea ] && echo runs/fovs_aria_labq || echo runs/$1_labq; }   # AEA's from the earlier AEA run
 folds() { [ $1 = aea ] && echo 1 2 3 4 5 ||
           $PY -c "import json,sys; print(*sorted(set(json.load(open(sys.argv[1])).values())))" data/lab_q/$1_where_folds.json; }
-final() { case $1 in aea) s=location; v=causalfix;; adt) s=session; v=causalfix;; hdepic) s=location; v=cachefix;; esac
+final() { [ -n "${FINAL:-}" ] && { echo $FINAL; return; }
+          case $1 in aea) s=location; v=causalfix;; adt) s=session; v=causalfix;; hdepic) s=location; v=cachefix;; esac
           p=probs_$1_lag_${s}_residual_pc_sph; echo ${p}_${v}_sphgeo.npz,${p}_seeds10_${v}_sphgeo.npz:mem+video; }
 lanes() {                                                     # lanes <function> <job> ...: two GPUs, jobs alternating
   local fn=$1 i=0 a=() b=(); shift
