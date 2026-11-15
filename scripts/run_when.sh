@@ -10,7 +10,8 @@
 #   ./scripts/run_when.sh 2>&1 | tee -a ~/run_when.log          (in tmux)
 # DATASETS (default "aea adt hdepic"), G0 / G1: the two GPUs (G0=G1: two folds at a time on one GPU), LANES=1: one fold
 # at a time, NW: data loader workers, UPDATES: optimiser steps per fine-tune (default 14000, as the WHERE fine-tunes:
-# epochs = UPDATES x batch 16 / the fold's training samples, at least 1).
+# epochs = UPDATES x batch 16 / the fold's training samples, at least 1). OURS=0: without the lab's WHEN scores
+# (when_v4_<ds>.npz; only the "ours on the same questions" comparison needs them), e.g. before the lab has them.
 set -euo pipefail
 source ~/gb_env.sh
 cd ~/GazeBeyond
@@ -25,6 +26,8 @@ HDEPIC_RAW=/data/disk2/hdepic/HD-EPIC/raw
 ADT_SRC=/data/disk2/adt
 DS=${DATASETS:-aea adt hdepic}
 mkdir -p data/lab_q $FCL results logs
+fcs() { [ "${OURS:-1}" = 0 ] && echo $1.npz || echo $1.npz when_v4_$1.npz; }   # the lab's forecast files we need
+ours() { [ "${OURS:-1}" = 0 ] || echo --ours $FCL/when_v4_$1.npz:gru_ens; }
 
 bench() { [ $1 = aea ] && echo data/fovs_aria_labq_when || echo data/$1_labq_when; }
 folds() { [ $1 = aea ] && echo 1 2 3 4 5 ||
@@ -54,10 +57,10 @@ ftn() { local ds=${2%:*} f=${2#*:} init=$AEA0 out=runs/${2%:*}_labq_when/ft_f${2
 
 for ds in $DS; do
   echo "== $ds: the lab's forecast files, folds, questions, benchmark"
-  for f in $ds.npz when_v4_$ds.npz; do                       # both or neither: never half of a lab rebuild
+  for f in $(fcs $ds); do                       # both or neither: never half of a lab rebuild
     [ -f $FCL/$f ] || [ -f $FC/$f ] || { echo "no $FC/$f (nor a copy in $FCL): put the lab's file there first"; exit 1; }
   done
-  for f in $ds.npz when_v4_$ds.npz; do
+  for f in $(fcs $ds); do
     [ -f $FCL/$f ] || { cp $FC/$f $FCL/$f; echo "   copied $FC/$f ($(date -r $FC/$f +%F' '%T))"; }
   done
   if [ $ds = aea ]; then
@@ -83,7 +86,7 @@ for ds in $DS; do
   if [ ! -f results/gbf_when_astrained_$ds.npz ]; then
     CUDA_VISIBLE_DEVICES=$G0 $PY scripts/export_lab_probs.py when --bench $(bench $ds) --runs $AEA0 \
         --eval-folds $(folds $ds) --out results/gbf_when_astrained_$ds.npz --forecast $FCL/$ds.npz \
-        --ours $FCL/when_v4_$ds.npz:gru_ens | tee results/gbf_when_astrained_$ds.txt
+        $(ours $ds) | tee results/gbf_when_astrained_$ds.txt
   else
     echo "   done: results/gbf_when_astrained_$ds.txt"
   fi
@@ -95,7 +98,7 @@ for ds in $DS; do
   [ -f results/gbf_when_retrained_$ds.npz ] && { echo "   $ds retrained: done (results/gbf_when_retrained_$ds.txt)"; continue; }
   CUDA_VISIBLE_DEVICES=$G0 $PY scripts/export_lab_probs.py when --bench $(bench $ds) \
       --runs $(for f in $(folds $ds); do echo runs/${ds}_labq_when/ft_f$f; done) \
-      --out results/gbf_when_retrained_$ds.npz --forecast $FCL/$ds.npz --ours $FCL/when_v4_$ds.npz:gru_ens \
+      --out results/gbf_when_retrained_$ds.npz --forecast $FCL/$ds.npz $(ours $ds) \
       | tee results/gbf_when_retrained_$ds.txt
 done
 
