@@ -11,13 +11,15 @@
 # VIDEO=0: retrained without the camera tokens (EgoSpanLift's original inputs), as runs/<ds>_labq/ft_f<f> and
 # <suite>/probs_gbf_retrained_novid_<ds>.npz; stops after the export (the table and the video runs are left alone).
 # FINAL: the run the exports are compared with, <probs file(s)>:<variant> (default: our final run in the suite; an
-# absolute path is fine, e.g. the lab's file after a rebuild of the questions).
+# absolute path is fine, e.g. the lab's file after a rebuild of the questions); FINAL=none: no comparison.
+# SS: the suite folder the questions (data_<ds>_lag.npz) are read from and the exports written to (default our
+# SensorySpotlight suite; e.g. a folder linking the lab's rebuilt data_adt_lag.npz).
 set -euo pipefail
 source ~/gb_env.sh
 cd ~/GazeBeyond
 L=${L:-/data/SS/SS/Dynamic_Fusion_ALFA/data/traj_forecast/attention_shift}
 FC=${FC:-$L/forecast}
-SS=~/SensorySpotlight/data/traj_forecast/attention_shift/senses_suite
+SS=${SS:-~/SensorySpotlight/data/traj_forecast/attention_shift/senses_suite}
 G0=${G0:-0}; G1=${G1:-1}
 CFG=configs/fovs_aria_shift.yaml
 AEA0=runs/fovs_aria_lab/egospanlift_s0                     # the AEA model of the default split (test location 4)
@@ -39,6 +41,7 @@ bench() { [ $1 = aea ] && echo data/fovs_aria_labq_where || echo data/$1_labq_wh
 rdir() { [ $1 = aea ] && echo runs/fovs_aria_labq || echo runs/$1_labq; }   # AEA's from the earlier AEA run
 folds() { [ $1 = aea ] && echo 1 2 3 4 5 ||
           $PY -c "import json,sys; print(*sorted(set(json.load(open(sys.argv[1])).values())))" data/lab_q/$1_where_folds.json; }
+cmp() { [ "${FINAL:-}" = none ] || echo --compare $(final $1); }   # export_lab_probs' comparison, if any
 final() { [ -n "${FINAL:-}" ] && { echo $FINAL; return; }
           case $1 in aea) s=location; v=causalfix;; adt) s=session; v=causalfix;; hdepic) s=location; v=cachefix;; esac
           p=probs_$1_lag_${s}_residual_pc_sph; echo ${p}_${v}_sphgeo.npz,${p}_seeds10_${v}_sphgeo.npz:mem+video; }
@@ -82,7 +85,7 @@ for ds in $DS; do
     echo "$ds: $(grep -c FAILED logs/build_${ds}_where.log || true) recordings failed (logs/build_${ds}_where.log)"
     $PY scripts/build_dataset.py pack --config $CFG --out $(bench $ds)
   fi
-  if [ ! -f $(bench $ds)/video_all.npz ]; then
+  if [ $VID = 1 ] && [ ! -f $(bench $ds)/video_all.npz ]; then        # camera tokens: only the video runs need them
     v=$SS/dense_${ds}_lag_vjepa.npy; [ -f $v ] || v=$SS/dense_${ds}_lag_vjepalab.npy   # the same V-JEPA cache, renamed
     $PY scripts/attach_shift_video.py --bench $(bench $ds) --suite $SS --tag ${ds}_lag --dense $v
   fi
@@ -90,7 +93,7 @@ for ds in $DS; do
   echo "== $ds: as released"
   if [ ! -f $SS/probs_gbf_astrained_$ds.npz ]; then
     CUDA_VISIBLE_DEVICES=$G0 $PY scripts/export_lab_probs.py where --bench $(bench $ds) --suite $SS --tag ${ds}_lag \
-        --name gbf_astrained_$ds --runs $AEA0 --eval-folds $(folds $ds) --compare $(final $ds) \
+        --name gbf_astrained_$ds --runs $AEA0 --eval-folds $(folds $ds) $(cmp $ds) \
         | tee results/gbf_where_astrained_$ds.txt
   else
     echo "   done: results/gbf_where_astrained_$ds.txt"
@@ -103,7 +106,7 @@ for ds in $DS; do
   [ -f $SS/probs_${RT}_$ds.npz ] && { echo "   $ds retrained: done (results/${RT/gbf_/gbf_where_}_$ds.txt)"; continue; }
   CUDA_VISIBLE_DEVICES=$G0 $PY scripts/export_lab_probs.py where --bench $(bench $ds) --suite $SS --tag ${ds}_lag \
       --name ${RT}_$ds --runs $(for f in $(folds $ds); do echo $(rdir $ds)/${FT}_f$f; done) \
-      --compare $(final $ds) | tee results/${RT/gbf_/gbf_where_}_$ds.txt
+      $(cmp $ds) | tee results/${RT/gbf_/gbf_where_}_$ds.txt
 done
 [ $VID = 1 ] || { echo "WHERE (no video) DONE: $SS/probs_${RT}_<ds>.npz"; exit 0; }
 
