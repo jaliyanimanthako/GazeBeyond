@@ -1,13 +1,15 @@
 """EgoSpanLift's own 3D output at the lab's WHERE questions, so it can be read at objects' 3D locations (SensorySpotlight
 tools/hdepic_next_object.py compare, NO_VOXELS). export_lab_probs.py where max-pools each direction's distance cells
-into the lab's 960 directions; this keeps every (azimuth, elevation, distance) cell of the spherical grid.
+into the lab's 960 directions; this keeps every cell: the paper's R^3 Cartesian voxels (20 cm in the 3.2 m cube around
+the CPF) or the (azimuth, elevation, distance) cells of the spherical grid, whichever the benchmark was built on.
 
     S=~/SensorySpotlight/data/traj_forecast/attention_shift/senses_suite
     python scripts/export_voxel_probs.py --bench data/hdepic_labq_where --suite $S --tag hdepic_lag \
         --runs runs/hdepic_labq/ft_f{1,2,...} --out $S/voxels_gbf_retrained_novid_hdepic.npz
 
-Writes qid (question rows of <suite>/data_<tag>.npz), p (questions, azimuth, elevation, distance) float16, the --level
-sigmoid per cell as predicted, the grid's edges and cube size, and M (signed permutation: grid frame = lab head frame
+Writes qid (question rows of <suite>/data_<tag>.npz), p (questions, x, y, z voxels or azimuth, elevation, distance
+cells) float16, the --level sigmoid per cell as predicted, resolution and cube size (Cartesian) or the grid's edges
+and cube size (spherical), and M (signed permutation: grid frame = lab head frame
 @ M.T, rows; checked as in export_lab_probs.py). Each question is scored by the run of its own CV fold.
 """
 import argparse
@@ -38,8 +40,6 @@ def main():
     ap.add_argument("--max-frame-err", type=float, default=10.0)
     a = ap.parse_args()
     bench = PackedBenchmark(a.bench)
-    if bench.grid is None:
-        raise SystemExit(f"{a.bench} is not on the spherical grid")
     if "land_dir" not in bench.arrays or "qid" not in bench.arrays:
         raise SystemExit(f"{a.bench} is not a WHERE benchmark built with build.window.anchor=lab")
     Q = np.load(os.path.join(a.suite, f"data_{a.tag}.npz"))
@@ -57,10 +57,14 @@ def main():
         raise SystemExit("several samples per question: expected one")
     g = bench.grid
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-    np.savez_compressed(a.out, qid=qid[s], p=prob[s].reshape(len(s), *g.shape).astype(np.float16),
-                        yaw_edges=np.asarray(g.yaw_edges), pitch_edges=np.asarray(g.pitch_edges),
-                        depth_edges=np.asarray(g.depth_edges), cube_size=g.cube_size, M=M)
-    print(f"wrote {a.out}: {len(s)} questions x {g.shape} cells ({a.level})")
+    out = dict(qid=qid[s], p=prob[s].reshape(len(s), *bench.shape).astype(np.float16), M=M)
+    if g is None:                                                      # the paper's R^3 voxels, centred on the CPF
+        out |= dict(resolution=bench.R, cube_size=float(bench.meta["lift"]["cube_size"]))
+    else:
+        out |= dict(yaw_edges=np.asarray(g.yaw_edges), pitch_edges=np.asarray(g.pitch_edges),
+                    depth_edges=np.asarray(g.depth_edges), cube_size=g.cube_size)
+    np.savez_compressed(a.out, **out)
+    print(f"wrote {a.out}: {len(s)} questions x {bench.shape} {'voxels' if g is None else 'cells'} ({a.level})")
 
 
 if __name__ == "__main__":
